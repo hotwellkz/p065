@@ -95,3 +95,4 @@ sudo /usr/local/bin/docker compose exec backend sh -c '
 3. ✅ Логи показывают правильные пути без дублирования `videos/videos`
 4. ✅ Диагностический endpoint `/api/diag/storage` показывает правильные пути
 
+

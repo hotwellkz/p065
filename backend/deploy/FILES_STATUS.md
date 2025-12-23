@@ -97,3 +97,4 @@ curl.exe -r 0-1023 -I https://api.shortsai.ru/api/media/hotwell-kz-at-gmail-com_
 
 Если sudo требует пароль, используйте DSM UI для перезапуска контейнера - это самый простой способ.
 
+

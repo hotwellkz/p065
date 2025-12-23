@@ -175,3 +175,4 @@ curl -H "Authorization: Bearer $token" http://192.168.100.222:3000/api/diag/stor
    ssh adminv@192.168.100.222 "cd /volume1/docker/shortsai/backend && sudo /usr/local/bin/docker compose logs --tail=50 backend | grep -i storage"
    ```
 
+

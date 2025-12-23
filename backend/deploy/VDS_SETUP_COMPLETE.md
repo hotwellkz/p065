@@ -148,3 +148,4 @@ sudo docker compose logs -f backend | grep -i "media\|blotato\|validation"
 4. Протестировать upload через Blotato
 5. Проверить логи на наличие ошибок
 
+

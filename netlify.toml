@@ -1,0 +1,15 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Отключить умное сканирование секретов для Firebase API ключей
+  # Firebase API ключи (начинающиеся с "AIza") являются публичными ключами,
+  # предназначенными для использования в клиентском коде
+  SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+

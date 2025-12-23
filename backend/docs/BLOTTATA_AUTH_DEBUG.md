@@ -209,3 +209,4 @@ sudo /usr/local/bin/docker-compose exec shorts-backend env | grep -i "frontend_o
    - Проверьте, что ключ реально существует в Firestore
    - Проверьте, что ключ расшифровывается
 
+

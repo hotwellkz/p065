@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    container_name: shortsai-backend
+    restart: always
+    ports:
+      - "7777:7777"
+    env_file:
+      - .env.production
+    volumes:
+      - ./storage:/app/storage
+      - ./tmp:/app/tmp
+
+
+
+
+

@@ -13,12 +13,17 @@ import { emailToSlug } from "./fileUtils";
  * Если registrationEmail нет, создаёт его из текущего email
  * 
  * @param userId - ID пользователя
+ * @param userEmail - Email пользователя (опционально, для оптимизации - избегает запрос к Firebase Auth)
  * @returns registrationEmail (первичный email при регистрации)
  */
-export async function getOrCreateRegistrationEmail(userId: string): Promise<string> {
+export async function getOrCreateRegistrationEmail(userId: string, userEmail?: string): Promise<string> {
   if (!isFirestoreAvailable() || !db) {
     Logger.warn("getOrCreateRegistrationEmail: Firestore not available, trying Firebase Auth", { userId });
-    // Fallback: получаем email из Firebase Auth
+    // Fallback: используем переданный userEmail или получаем из Firebase Auth
+    if (userEmail) {
+      Logger.info("getOrCreateRegistrationEmail: using provided userEmail", { userId, userEmail });
+      return userEmail;
+    }
     try {
       const adminInstance = getAdmin();
       if (adminInstance) {
@@ -54,19 +59,21 @@ export async function getOrCreateRegistrationEmail(userId: string): Promise<stri
       }
     }
 
-    // registrationEmail нет - получаем текущий email из Firebase Auth
-    let currentEmail: string | null = null;
-    try {
-      const adminInstance = getAdmin();
-      if (adminInstance) {
-        const userRecord = await adminInstance.auth().getUser(userId);
-        currentEmail = userRecord.email || null;
+    // registrationEmail нет - используем переданный userEmail или получаем из Firebase Auth
+    let currentEmail: string | null = userEmail || null;
+    if (!currentEmail) {
+      try {
+        const adminInstance = getAdmin();
+        if (adminInstance) {
+          const userRecord = await adminInstance.auth().getUser(userId);
+          currentEmail = userRecord.email || null;
+        }
+      } catch (authError) {
+        Logger.warn("getOrCreateRegistrationEmail: failed to get email from Firebase Auth", {
+          userId,
+          error: authError instanceof Error ? authError.message : String(authError)
+        });
       }
-    } catch (authError) {
-      Logger.warn("getOrCreateRegistrationEmail: failed to get email from Firebase Auth", {
-        userId,
-        error: authError instanceof Error ? authError.message : String(authError)
-      });
     }
 
     // Если email не найден, используем fallback
@@ -132,10 +139,11 @@ export function buildUserFolderKey(email: string, userId: string): string {
  * Автоматически получает registrationEmail и формирует ключ
  * 
  * @param userId - ID пользователя
+ * @param userEmail - Email пользователя (опционально, для оптимизации - избегает запрос к Firebase Auth)
  * @returns userFolderKey
  */
-export async function getUserFolderKey(userId: string): Promise<string> {
-  const registrationEmail = await getOrCreateRegistrationEmail(userId);
+export async function getUserFolderKey(userId: string, userEmail?: string): Promise<string> {
+  const registrationEmail = await getOrCreateRegistrationEmail(userId, userEmail);
   const folderKey = buildUserFolderKey(registrationEmail, userId);
 
   Logger.info("getUserFolderKey: computed", {

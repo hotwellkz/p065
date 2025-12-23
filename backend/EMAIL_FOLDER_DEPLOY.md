@@ -138,3 +138,4 @@ ssh adminv@192.168.100.222 "sudo /usr/local/bin/docker compose -f /volume1/docke
 3. **registrationEmail** - создаётся автоматически при первом использовании, не меняется при смене email
 4. **Fallback** - при удалении пользователя система проверяет оба формата (новый и старый)
 
+

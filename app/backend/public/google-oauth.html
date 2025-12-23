@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google OAuth для Google Drive</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            border-left: 4px solid #2196F3;
+        }
+        .button {
+            display: inline-block;
+            background: #4285f4;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 4px;
+            font-weight: 500;
+            margin: 10px 0;
+            cursor: pointer;
+            border: none;
+        }
+        .button:hover {
+            background: #357ae8;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            border-left: 4px solid #4caf50;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            border-left: 4px solid #f44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Авторизация Google Drive</h1>
+        
+        <div class="info">
+            <strong>Инструкция:</strong><br>
+            1. Введите ваш Firebase User ID (uid) ниже<br>
+            2. Нажмите кнопку "Авторизоваться через Google"<br>
+            3. Разрешите доступ к Google Drive<br>
+            4. Токены автоматически сохранятся
+        </div>
+
+        <div>
+            <label for="userId">Firebase User ID (uid):</label>
+            <input 
+                type="text" 
+                id="userId" 
+                placeholder="wJVWf7qvuoXYaVJSZbEGpNHUtva2"
+                value="wJVWf7qvuoXYaVJSZbEGpNHUtva2"
+            >
+        </div>
+
+        <button class="button" onclick="authorize()">
+            Авторизоваться через Google
+        </button>
+
+        <div id="status"></div>
+    </div>
+
+    <script>
+        function authorize() {
+            const userId = document.getElementById('userId').value.trim();
+            const statusDiv = document.getElementById('status');
+            
+            if (!userId) {
+                statusDiv.innerHTML = '<div class="status error">Пожалуйста, введите User ID</div>';
+                return;
+            }
+
+            statusDiv.innerHTML = '<div class="status">Перенаправление на Google...</div>';
+            
+            // Перенаправляем на OAuth URL
+            window.location.href = `http://localhost:8080/api/auth/google?userId=${encodeURIComponent(userId)}`;
+        }
+
+        // Проверяем, есть ли параметры в URL (после callback)
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('code')) {
+            document.getElementById('status').innerHTML = 
+                '<div class="status success">✅ Авторизация успешна! Токены сохранены.</div>';
+        }
+        if (urlParams.get('error')) {
+            document.getElementById('status').innerHTML = 
+                '<div class="status error">❌ Ошибка авторизации: ' + urlParams.get('error') + '</div>';
+        }
+    </script>
+</body>
+</html>
+
+

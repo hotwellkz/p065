@@ -177,3 +177,4 @@ BlottataLocalFileProcessor: Media URL validation failed
 3. **HEAD поддержка:** Endpoint поддерживает HEAD запросы для оптимизации проверок
 4. **Проверка IP адресов:** Система предупреждает, если используется IP вместо домена
 
+

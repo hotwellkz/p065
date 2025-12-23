@@ -1289,6 +1289,14 @@ export async function downloadAndSaveToLocal(
   const mode = prompt ? "auto" : "manual";
   const storageRoot = process.env.STORAGE_ROOT || "default (storage/videos)";
 
+  Logger.error("AUTO_SAVE_PIPELINE_MARKER v2: downloadAndSaveToLocal called", { 
+    version: "v2", 
+    ts: Date.now(),
+    mode,
+    channelId,
+    userId
+  });
+  
   Logger.info(`downloadAndSaveToLocal [${mode}]: start`, {
     mode,
     channelId,
@@ -1537,7 +1545,7 @@ export async function downloadAndSaveToLocal(
       const channelName = channelData.name || `channel_${channelId}`;
 
       // Получаем userFolderKey и channelFolderKey
-      const userFolderKey = await storage.resolveUserFolderKey(userId);
+      const userFolderKey = await storage.resolveUserFolderKey(userId, userEmail);
       const channelFolderKey = await storage.resolveChannelFolderKey(userId, channelId);
       
       Logger.info(`downloadAndSaveToLocal [${mode}]: folder keys resolved`, {
@@ -1551,17 +1559,107 @@ export async function downloadAndSaveToLocal(
         videoTitle: videoTitle || "not provided"
       });
 
-      // Генерируем уникальное имя файла на основе title
+      // ИСПРАВЛЕНИЕ: Используем videoTitle из UI как есть, НЕ перезаписываем его
+      // Если videoTitle приходит из UI (поле "НАЗВАНИЕ РОЛИКА / ФАЙЛА"), используем его напрямую
+      // Функция buildVideoBaseName уже умеет обрезать длинные названия через sanitizeBaseName
+      // Генерируем title через OpenAI ТОЛЬКО если его нет вообще
+      let effectiveTitle: string | undefined = videoTitle;
+      if (mode === "auto" && !effectiveTitle) {
+        try {
+          if (prompt) {
+            const { generateVideoTitleFromPrompt } = await import("./titleGenerator");
+            const langHint = (channelData as any).language || "ru";
+            Logger.info(`[AUTO_SAVE] generating title from prompt (no UI title provided)`, {
+              mode,
+              channelId,
+              userId,
+              promptLength: prompt.length,
+              languageHint: langHint,
+              reason: "no videoTitle from UI"
+            });
+
+            const titleResult = await generateVideoTitleFromPrompt({
+              promptText: prompt,
+              languageHint: langHint,
+              channelName: channelData.name
+            });
+
+            effectiveTitle = titleResult.title;
+            Logger.info(`[TITLE_GEN] generated for auto save (fallback)`, {
+              mode,
+              channelId,
+              userId,
+              title: effectiveTitle,
+              titleSource: titleResult.source,
+              titleLength: effectiveTitle.length
+            });
+          }
+        } catch (titleError: any) {
+          Logger.warn(`[TITLE_GEN] failed for auto save, using fallback`, {
+            mode,
+            channelId,
+            userId,
+            error: titleError?.message || String(titleError)
+          });
+          // Если генерация не удалась, оставляем undefined - buildVideoBaseName обработает
+        }
+      } else if (effectiveTitle) {
+        // videoTitle из UI есть - используем его как есть
+        Logger.info(`[AUTO_SAVE] using videoTitle from UI`, {
+          mode,
+          channelId,
+          userId,
+          videoTitle: effectiveTitle,
+          videoTitleLength: effectiveTitle.length,
+          source: "ui"
+        });
+      }
+
+      // Генерируем уникальное имя файла на основе effectiveTitle или promptText
       const inboxDir = storage.resolveInboxDir(userFolderKey, channelFolderKey);
       const videoId = generateVideoId(); // Для метаданных и БД
-      const fileBaseName = await generateUniqueVideoFileName(videoTitle, inboxDir, videoId);
-      const safeBaseName = makeSafeBaseName(videoTitle);
+      
+      // ДИАГНОСТИКА: логируем перед генерацией имени файла
+      Logger.info(`[AUTO_SAVE] before filename generation`, {
+        mode,
+        channelId,
+        userId,
+        videoTitle: videoTitle || "not provided",
+        effectiveTitle: effectiveTitle || "not provided",
+        effectiveTitleType: typeof effectiveTitle,
+        effectiveTitleLength: effectiveTitle?.length || 0,
+        hasPrompt: !!prompt,
+        promptLength: prompt?.length || 0
+      });
+      
+      // Используем ЕДИНУЮ функцию генерации имени файла (для manual и auto)
+      const { buildVideoBaseName, resolveCollision } = await import("../utils/videoFilename");
+      const nameResult = await buildVideoBaseName({
+        promptText: prompt || null,
+        uiTitle: videoTitle || effectiveTitle || null,
+        channelName: channelData.name || null
+      });
+      
+      // Генерируем уникальное имя с проверкой коллизий (БЕЗ timestamp, только _2, _3 и т.д.)
+      const fileBaseName = await resolveCollision(inboxDir, nameResult.baseName, ".mp4");
 
+      // Проверяем, использовался ли суффикс коллизии
+      const collisionSuffixUsed = fileBaseName !== nameResult.baseName;
+      
       Logger.info(`downloadAndSaveToLocal [${mode}]: generated file name`, {
         mode,
         videoTitle: videoTitle || "not provided",
-        safeBaseName,
-        fileBaseName,
+        effectiveTitle: effectiveTitle || "not provided",
+        effectiveTitleLength: effectiveTitle?.length || 0,
+        baseNameSource: nameResult.source,
+        rawInputKind: videoTitle || effectiveTitle ? "uiTitle" : "prompt",
+        rawTitle: nameResult.rawTitle || "not provided",
+        baseName: nameResult.baseName,
+        baseNameLength: nameResult.baseName.length,
+        finalBaseName: fileBaseName,
+        finalBaseNameLength: fileBaseName.length,
+        collisionSuffixUsed,
+        reason: nameResult.reason || "none",
         videoId,
         inboxDir
       });
@@ -1602,24 +1700,54 @@ export async function downloadAndSaveToLocal(
       // Сохраняем файл атомарно
       const saveResult = await storage.saveBufferToFile(fileBuffer, inboxPath);
 
-      // Сохраняем метаданные
-      const meta = {
-        videoId,
-        userId,
+      Logger.info(`[AUTO_SAVE] video file saved`, {
+        mode,
         channelId,
-        originalTitle: videoTitle || null,
-        safeFileBase: safeBaseName,
-        finalFileBase: fileBaseName,
-        mp4File: `${fileBaseName}.mp4`,
-        jsonFile: `${fileBaseName}.json`,
-        title: videoTitle || channelName,
-        prompt: prompt || undefined,
-        provider: "syntx",
-        createdAt: new Date().toISOString(),
-        fileSize: saveResult.bytes,
-        contentType: "video/mp4"
-      };
-      await storage.writeJson(inboxMetaPath, meta);
+        userId,
+        videoId,
+        fileBaseName,
+        inboxPath,
+        resolvedPath: saveResult.resolvedPath || path.resolve(inboxPath),
+        bytes: saveResult.bytes
+      });
+
+      // Сохраняем метаданные в JSON только если включен флаг SAVE_VIDEO_JSON (по умолчанию false)
+      // В авто-режиме JSON не создаётся, метаданные хранятся только в Firestore
+      const saveVideoJson = (globalThis as any).process?.env?.SAVE_VIDEO_JSON === "true";
+      if (saveVideoJson) {
+        const meta = {
+          videoId,
+          userId,
+          channelId,
+          originalTitle: videoTitle || null,
+          effectiveTitle: effectiveTitle || null,
+          safeFileBase: nameResult.baseName,
+          finalFileBase: fileBaseName,
+          mp4File: `${fileBaseName}.mp4`,
+          jsonFile: `${fileBaseName}.json`,
+          title: effectiveTitle || videoTitle || channelName,
+          prompt: prompt || undefined,
+          provider: "syntx",
+          createdAt: new Date().toISOString(),
+          fileSize: saveResult.bytes,
+          contentType: "video/mp4"
+        };
+        await storage.writeJson(inboxMetaPath, meta);
+        Logger.info(`downloadAndSaveToLocal [${mode}]: JSON metadata saved`, {
+          mode,
+          channelId,
+          userId,
+          videoId,
+          jsonPath: inboxMetaPath
+        });
+      } else {
+        Logger.info(`downloadAndSaveToLocal [${mode}]: JSON metadata skipped (SAVE_VIDEO_JSON=false)`, {
+          mode,
+          channelId,
+          userId,
+          videoId
+        });
+      }
 
       Logger.info(`downloadAndSaveToLocal [${mode}]: file saved to local storage successfully`, {
         mode,
@@ -1628,6 +1756,7 @@ export async function downloadAndSaveToLocal(
         videoId,
         fileBaseName,
         originalTitle: videoTitle || "not provided",
+        effectiveTitle: effectiveTitle || "not provided",
         inputPath: inboxPath,
         resolvedPath: path.resolve(inboxPath),
         filename: `${fileBaseName}.mp4`,
@@ -1642,6 +1771,7 @@ export async function downloadAndSaveToLocal(
         videoId,
         fileBaseName,
         originalTitle: videoTitle || "not provided",
+        effectiveTitle: effectiveTitle || "not provided",
         filePath: inboxPath,
         resolvedPath: path.resolve(inboxPath),
         filename: `${fileBaseName}.mp4`,
@@ -1662,6 +1792,7 @@ export async function downloadAndSaveToLocal(
           fileName: `${fileBaseName}.mp4`,
           fileBaseName,
           originalTitle: videoTitle || null,
+          effectiveTitle: effectiveTitle || null,
           createdAt: new Date(),
           source: mode === "auto" ? "schedule" : "manual", // Различаем автоматическое и ручное сохранение
           telegramMessageId: downloadResult.messageId

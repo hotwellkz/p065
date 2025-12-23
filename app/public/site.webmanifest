@@ -1,0 +1,25 @@
+{
+  "name": "Shorts AI Studio",
+  "short_name": "Shorts AI",
+  "description": "Генератор сценариев для TikTok, Reels и Shorts",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ],
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "display": "standalone",
+  "start_url": "/",
+  "scope": "/"
+}
+
+
+
+
+
+
+
+

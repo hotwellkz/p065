@@ -4,7 +4,7 @@ import { Logger } from "../utils/logger";
 import { processBlottataLocalFile } from "./blottataLocalFileProcessor";
 import type { Channel } from "../types/channel";
 import { db, isFirestoreAvailable } from "./firebaseAdmin";
-import { getUserChannelStoragePaths, ensureChannelDirectories as ensureUserChannelDirectories } from "./storage/userChannelStorage";
+import { getStorageService } from "./storageService";
 
 /**
  * Хранилище обработанных файлов для предотвращения повторной обработки
@@ -186,45 +186,49 @@ export async function processNewFilesForChannel(channel: Channel & { ownerId?: s
       });
     }
 
-    // Получаем пути к хранилищу канала пользователя
+    // Получаем пути к хранилищу канала пользователя через новый StorageService
     const channelName = channel.name || `channel_${channel.id}`;
     // ownerId уже проверен выше, но TypeScript требует явного приведения
     if (!channel.ownerId) {
       Logger.warn("blottataLocalMonitor: Channel ownerId is missing after check", { channelId: channel.id });
       return result;
     }
-    const paths = getUserChannelStoragePaths({
-      userId: channel.ownerId,
-      userEmail,
-      channelId: channel.id,
-      channelName
-    });
+    
+    // Используем новый StorageService для получения правильных путей с /users
+    const storage = getStorageService();
+    const userFolderKey = await storage.resolveUserFolderKey(channel.ownerId, userEmail);
+    const channelFolderKey = await storage.resolveChannelFolderKey(channel.ownerId, channel.id);
+    
+    const inputDir = storage.resolveInboxDir(userFolderKey, channelFolderKey);
+    const archiveDir = storage.resolveUploadedDir(userFolderKey, channelFolderKey);
     
     // Создаём директории, если их нет
-    await ensureUserChannelDirectories(paths);
+    await storage.ensureUserChannelDirs(userFolderKey, channelFolderKey);
 
-    console.log('[BlotataMonitor] Scanning channel folder', {
+    Logger.info('[BlotataMonitor] Scanning channel folder', {
       channelId: channel.id,
       channelName,
-      inputDir: paths.inputDir,
-      archiveDir: paths.archiveDir
+      userFolderKey,
+      channelFolderKey,
+      inputDir,
+      archiveDir
     });
 
     Logger.info("blottataLocalMonitor: Checking folder for new files", {
       channelId: channel.id,
       channelName,
-      inputDir: paths.inputDir,
-      archiveDir: paths.archiveDir
+      inputDir,
+      archiveDir
     });
 
     // Получаем список видео-файлов в inputDir
-    const files = await getVideoFilesInDirectory(paths.inputDir);
+    const files = await getVideoFilesInDirectory(inputDir);
 
     if (files.length === 0) {
       Logger.info("blottataLocalMonitor: No files to publish for channel", {
         channelId: channel.id,
         channelName,
-        inputDir: paths.inputDir
+        inputDir
       });
       return result;
     }
@@ -238,7 +242,7 @@ export async function processNewFilesForChannel(channel: Channel & { ownerId?: s
 
     // Обрабатываем каждый файл
     for (const file of files) {
-      const lockFilePath = path.join(paths.inputDir, `${file.fileName}.lock`);
+      const lockFilePath = path.join(inputDir, `${file.fileName}.lock`);
       
       // Проверяем наличие lock-файла (файл обрабатывается)
       try {
@@ -286,8 +290,13 @@ export async function processNewFilesForChannel(channel: Channel & { ownerId?: s
       }
 
       try {
-        // Обрабатываем файл
-        const processResult = await processBlottataLocalFile(channel, file.fileName, paths);
+        // Обрабатываем файл - передаём новые пути через StorageService
+        const processResult = await processBlottataLocalFile(
+          channel, 
+          userEmail,
+          file.fileName, 
+          path.join(inputDir, file.fileName)
+        );
 
         if (processResult.success) {
           // Помечаем файл как обработанный

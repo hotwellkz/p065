@@ -71,3 +71,4 @@ ls -lh videos/hotwell-kz3-at-gmail-com/surprise-unbox-planet-njzssCxM/
 
 После перезапуска все новые видео будут сохраняться в `/volume1/docker/shortsai/backend/videos/` на сервере.
 
+

@@ -80,3 +80,4 @@ sudo /usr/local/bin/docker compose ps
 /volume1/docker/shortsai/backend/storage/videos/users/{userId}/channels/{channelId}/inbox/{videoId}.mp4
 ```
 
+

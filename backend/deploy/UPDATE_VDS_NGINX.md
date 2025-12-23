@@ -159,3 +159,4 @@ sudo docker compose logs -f backend | grep -i "media\|blotato\|validation"
 - Backend отдает файлы с поддержкой Range (206 Partial Content)
 - Blotato может читать метаданные
 
+

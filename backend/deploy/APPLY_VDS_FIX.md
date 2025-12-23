@@ -125,3 +125,4 @@ sudo docker compose logs -f backend | grep -i "media\|blotato\|validation"
 3. ✅ Blotato может читать метаданные через Range запросы
 4. ✅ Нет ошибки "Failed to read media metadata"
 
+

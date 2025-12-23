@@ -108,3 +108,4 @@ ssh adminv@192.168.100.222 "find /volume1/docker/shortsai/backend/storage/videos
 ssh adminv@192.168.100.222 "cd /volume1/docker/shortsai/backend && sudo /usr/local/bin/docker compose logs backend --tail=100 | grep -E 'STORAGE|fileBaseName|originalTitle'"
 ```
 
+

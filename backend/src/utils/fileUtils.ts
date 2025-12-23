@@ -142,7 +142,7 @@ export function channelNameToSlug(name: string | null | undefined): string {
  * Простая транслитерация кириллицы в латиницу
  * Без RegExp и объектных литералов, чтобы не ломаться на старых версиях TS
  */
-function translitRuToLat(text: string): string {
+export function translitRuToLat(text: string): string {
   let result = "";
 
   for (const ch of text) {
@@ -252,7 +252,30 @@ export function makeSafeBaseName(title: string | null | undefined): string {
 
   let safe = title.trim();
 
-  // Транслитерация кириллицы
+  // Для очень длинных текстов берём первые 5-7 слов ДО транслитерации
+  // Это помогает избежать проблем с очень длинными описаниями
+  const words = safe.split(/\s+/).filter(w => w.length > 0); // Фильтруем пустые слова
+  if (words.length > 7) {
+    // Берём первые 7 слов, но не более 60 символов исходного текста (чтобы после sanitize было ~50)
+    let truncated = words.slice(0, 7).join(" ");
+    if (truncated.length > 60) {
+      truncated = truncated.substring(0, 60);
+      const lastSpace = truncated.lastIndexOf(" ");
+      if (lastSpace > 30) {
+        truncated = truncated.substring(0, lastSpace);
+      }
+    }
+    safe = truncated;
+  } else if (safe.length > 80) {
+    // Если текст очень длинный, обрезаем до 80 символов по словам (чтобы после sanitize было ~50)
+    safe = safe.substring(0, 80);
+    const lastSpace = safe.lastIndexOf(" ");
+    if (lastSpace > 40) {
+      safe = safe.substring(0, lastSpace);
+    }
+  }
+
+  // Транслитерация кириллицы (ВАЖНО: до других преобразований)
   safe = translitRuToLat(safe);
 
   // Заменяем пробелы на '_'
@@ -261,11 +284,13 @@ export function makeSafeBaseName(title: string | null | undefined): string {
   // Удаляем запрещённые символы: <>:"/\|?* и управляющие символы
   safe = safe.replace(/[<>:"/\\|?*\x00-\x1F\x7F]/g, "");
 
-  // Оставляем только латиницу, цифры, '-', '_', '.'
-  safe = safe.replace(/[^a-zA-Z0-9._-]/g, "");
+  // Удаляем запятые, точки, двоеточия и другие знаки препинания (кроме дефиса и подчёркивания)
+  // ВАЖНО: НЕ удаляем дефис (-), он разрешён в именах файлов
+  safe = safe.replace(/[,.;:!?()[\]{}'"]/g, "");
 
-  // Заменяем точку на '-' (лучше для файловых систем)
-  safe = safe.replace(/\./g, "-");
+  // Оставляем только латиницу, цифры, '-', '_'
+  // ВАЖНО: дефис (-) и подчёркивание (_) должны остаться
+  safe = safe.replace(/[^a-zA-Z0-9_-]/g, "");
 
   // Убираем повторяющиеся '_' и '-'
   safe = safe.replace(/[-_]+/g, (match) => match[0] === '-' ? '-' : '_');
@@ -275,15 +300,27 @@ export function makeSafeBaseName(title: string | null | undefined): string {
   // Убираем '_' и '-' в начале и конце
   safe = safe.replace(/^[-_]+|[-_]+$/g, "");
 
-  // Обрезаем до 80 символов
-  if (safe.length > 80) {
-    safe = safe.slice(0, 80);
+  // Обрезаем до 50 символов (требование: максимум 50 символов)
+  if (safe.length > 50) {
+    safe = safe.slice(0, 50);
     // Убираем возможные '_' и '-' в конце после обрезки
     safe = safe.replace(/[-_]+$/, "");
   }
 
-  // Если после всех преобразований строка пустая
-  if (safe.length === 0) {
+  // Если после всех преобразований строка пустая или слишком короткая
+  if (safe.length === 0 || safe.length < 3) {
+    // Fallback: пытаемся взять первые слова из исходного текста
+    const originalWords = title.trim().split(/\s+/).filter(w => w.length > 0);
+    if (originalWords.length > 0) {
+      const fallback = originalWords.slice(0, 3).join("_");
+      const transliterated = translitRuToLat(fallback)
+        .replace(/[^a-zA-Z0-9_-]/g, "")
+        .replace(/[-_]+/g, "_")
+        .replace(/^[-_]+|[-_]+$/g, "");
+      if (transliterated.length >= 3) {
+        return transliterated.substring(0, 50);
+      }
+    }
     return "video";
   }
 
@@ -306,39 +343,56 @@ export async function generateUniqueVideoFileName(
 ): Promise<string> {
   const base = makeSafeBaseName(title);
   
-  // Если title отсутствует, используем fallback на timestamp + shortId
+  // ДИАГНОСТИКА: логируем входные данные и промежуточные состояния
+  const { Logger } = await import("../utils/logger");
+  
+  // Если base === "video", логируем детальную диагностику
+  if (base === "video" && title) {
+    const translitResult = translitRuToLat(title);
+    const afterSpaces = translitResult.replace(/\s+/g, "_");
+    const afterForbidden = afterSpaces.replace(/[<>:"/\\|?*\x00-\x1F\x7F]/g, "");
+    const afterPunctuation = afterForbidden.replace(/[,.;:!?()[\]{}'"]/g, "");
+    const afterFinalClean = afterPunctuation.replace(/[^a-zA-Z0-9_-]/g, "");
+    
+    Logger.warn(`[FILENAME_GEN] makeSafeBaseName returned "video", debugging`, {
+      originalTitle: title,
+      titleLength: title.length,
+      translitResult,
+      afterSpaces,
+      afterForbidden,
+      afterPunctuation,
+      afterFinalClean,
+      afterFinalCleanLength: afterFinalClean.length,
+      charCodes: title.split("").map(ch => `${ch}:${ch.charCodeAt(0)}`).join(", ")
+    });
+  }
+  
+  Logger.info(`[FILENAME_GEN] generateUniqueVideoFileName called`, {
+    title: title || "null/undefined",
+    titleType: typeof title,
+    titleLength: title?.length || 0,
+    base,
+    baseLength: base?.length || 0,
+    shortId: shortId || "not provided"
+  });
+  
+  // Если title отсутствует или base === "video", используем fallback БЕЗ timestamp
   if (!title || base === "video") {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8);
-    return shortId ? `${timestamp}_${shortId.slice(0, 6)}` : `${timestamp}_${random}`;
+    // Используем случайное слово вместо timestamp
+    const randomWord = Math.random().toString(36).substring(2, 8);
+    const fallbackName = shortId ? `video_${shortId.slice(0, 6)}` : `video_${randomWord}`;
+    Logger.warn(`[FILENAME_GEN] using fallback name (NO TIMESTAMP)`, {
+      reason: !title ? "title is null/undefined" : "base === 'video'",
+      fallbackName
+    });
+    // Используем resolveCollision для проверки коллизий
+    const { resolveCollision } = await import("./videoFilename");
+    return await resolveCollision(targetDir, fallbackName, ".mp4");
   }
 
-  // Проверяем существование файла
-  let candidate = base;
-  let counter = 2;
-
-  while (true) {
-    const mp4Path = path.join(targetDir, `${candidate}.mp4`);
-    try {
-      await fs.access(mp4Path);
-      // Файл существует, пробуем следующий вариант
-      candidate = `${base}__${counter}`;
-      counter++;
-    } catch {
-      // Файл не существует, можно использовать это имя
-      break;
-    }
-
-    // Защита от бесконечного цикла
-    if (counter > 1000) {
-      // Если слишком много конфликтов, добавляем короткий ID
-      const fallbackId = shortId ? shortId.slice(0, 6) : Math.random().toString(36).substring(2, 8);
-      candidate = `${base}__${fallbackId}`;
-      break;
-    }
-  }
-
-  return candidate;
+  // Используем новую функцию resolveCollision для единообразия
+  const { resolveCollision } = await import("./videoFilename");
+  return await resolveCollision(targetDir, base, ".mp4");
 }
 
 export function formatFileName(title: string, extension: string = ".mp4"): string {

@@ -125,3 +125,4 @@ curl -I https://api.hotwell.synology.me/api/media/...
 4. Проверить firewall правила
 5. Связаться с поддержкой Blotato, если проблема сохраняется
 
+

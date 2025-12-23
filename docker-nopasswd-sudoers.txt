@@ -1,0 +1,18 @@
+# Инструкция для добавления в /etc/sudoers через sudo visudo
+# На Synology может не работать /etc/sudoers.d/, поэтому добавляем напрямую в /etc/sudoers
+# 
+# Выполните на Synology:
+# sudo sh -c 'echo "" >> /etc/sudoers'
+# sudo sh -c 'echo "# Docker commands without password" >> /etc/sudoers'
+# sudo sh -c 'echo "admin ALL=(ALL) NOPASSWD: /usr/local/bin/docker" >> /etc/sudoers'
+# sudo sh -c 'echo "admin ALL=(ALL) NOPASSWD: /usr/local/bin/docker-compose" >> /etc/sudoers'
+# sudo sh -c 'echo "adminv ALL=(ALL) NOPASSWD: /usr/local/bin/docker" >> /etc/sudoers'
+# sudo sh -c 'echo "adminv ALL=(ALL) NOPASSWD: /usr/local/bin/docker-compose" >> /etc/sudoers'
+#
+# ИЛИ используйте альтернативный подход - скрипт-обёртку (см. ниже)
+
+admin ALL=(ALL) NOPASSWD: /usr/local/bin/docker
+admin ALL=(ALL) NOPASSWD: /usr/local/bin/docker-compose
+adminv ALL=(ALL) NOPASSWD: /usr/local/bin/docker
+adminv ALL=(ALL) NOPASSWD: /usr/local/bin/docker-compose
+

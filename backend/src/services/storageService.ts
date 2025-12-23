@@ -90,10 +90,11 @@ export class StorageService {
    * Формат: {emailSlug}__{userId}
    * 
    * @param userId - ID пользователя
+   * @param userEmail - Email пользователя (опционально, для оптимизации)
    * @returns userFolderKey
    */
-  async resolveUserFolderKey(userId: string): Promise<string> {
-    return getUserFolderKey(userId);
+  async resolveUserFolderKey(userId: string, userEmail?: string): Promise<string> {
+    return getUserFolderKey(userId, userEmail);
   }
 
   /**

@@ -4,6 +4,7 @@ import { Logger } from "../utils/logger";
 import { db, isFirestoreAvailable } from "./firebaseAdmin";
 import { getAutoDownloadDelayMinutesForChannel } from "./autoSendScheduler";
 import type { Channel } from "../types/channel";
+import { generateVideoTitleFromPrompt, type TitleSource } from "./titleGenerator";
 
 export type VideoGenerationSource = "schedule" | "custom_prompt";
 
@@ -12,7 +13,7 @@ export interface VideoGenerationOptions {
   userId: string;
   prompt: string;
   source: VideoGenerationSource;
-  title?: string; // Опциональное название для кастомного промпта
+  title?: string; // Опциональное название для кастомного промпта (из UI)
 }
 
 export interface VideoGenerationResult {
@@ -93,6 +94,9 @@ export async function runVideoGenerationForChannel(
   }
 
   try {
+    let effectiveTitle: string | undefined = title?.trim() || undefined;
+    let titleSource: TitleSource | undefined = effectiveTitle ? "ui" : undefined;
+
     // Проверяем, что канал существует и принадлежит пользователю
     const channelRef = db
       .collection("users")
@@ -123,6 +127,7 @@ export async function runVideoGenerationForChannel(
       autoDownloadDelayMinutes?: number;
       generationTransport?: "telegram_global" | "telegram_user";
       telegramSyntaxPeer?: string | null;
+      language?: "ru" | "en" | "kk";
     };
 
     const channel = {
@@ -146,6 +151,63 @@ export async function runVideoGenerationForChannel(
       source,
       transport: channel.generationTransport
     });
+
+    // ИСПРАВЛЕНИЕ: Используем title из UI как есть, НЕ перезаписываем его
+    // Если title приходит из UI (поле "НАЗВАНИЕ РОЛИКА / ФАЙЛА"), используем его напрямую
+    // Функция buildVideoBaseName уже умеет обрезать длинные названия через sanitizeBaseName
+    // Генерируем title через OpenAI ТОЛЬКО если его нет вообще
+    if (!effectiveTitle) {
+      try {
+        const langHint = channelData.language || "ru";
+        
+        Logger.info("[AUTO_JOB] generating title from prompt (no UI title provided)", {
+          channelId,
+          userId,
+          source,
+          languageHint: langHint,
+          promptLength: prompt.length,
+          reason: "no title from UI"
+        });
+
+        const titleResult = await generateVideoTitleFromPrompt({
+          promptText: prompt,
+          languageHint: langHint,
+          channelName: channelData.name
+        });
+
+        effectiveTitle = titleResult.title;
+        titleSource = titleResult.source;
+
+        Logger.info("[TITLE_GEN] generated for auto job (fallback)", {
+          channelId,
+          userId,
+          source,
+          title: effectiveTitle,
+          titleSource,
+          titleLength: effectiveTitle.length
+        });
+      } catch (titleError: any) {
+        const msg = titleError?.message || String(titleError);
+        Logger.warn("[TITLE_GEN] generation failed for auto job, proceeding without title", {
+          channelId,
+          userId,
+          source,
+          error: msg
+        });
+        // Если генерация не удалась, оставляем undefined
+        effectiveTitle = undefined;
+      }
+    } else {
+      // Title из UI есть - используем его как есть
+      Logger.info("[AUTO_JOB] using title from UI", {
+        channelId,
+        userId,
+        source,
+        title: effectiveTitle,
+        titleLength: effectiveTitle.length,
+        titleSource: "ui"
+      });
+    }
 
     // Шаг 1: Отправляем промпт в Syntx
     Logger.info("runVideoGenerationForChannel: sending prompt to Syntx", {
@@ -249,7 +311,7 @@ export async function runVideoGenerationForChannel(
             chatId: messageInfo.chatId
           },
           delayMinutes,
-          videoTitle: title,
+          videoTitle: effectiveTitle,
           prompt: prompt.trim()
         });
 
@@ -285,7 +347,10 @@ export async function runVideoGenerationForChannel(
       await channelRef.collection("videoGenerations").add({
         source,
         prompt: prompt.trim(),
-        title: title || null,
+        title: effectiveTitle || null,
+        videoTitle: effectiveTitle || null,
+        titleSource: titleSource || (title ? "ui" : null),
+        promptText: prompt.trim(),
         messageId: messageInfo.messageId,
         chatId: messageInfo.chatId,
         status: "queued",

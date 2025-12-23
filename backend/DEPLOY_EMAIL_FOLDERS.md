@@ -87,3 +87,4 @@ find /volume1/docker/shortsai/backend/storage/videos/users -name "*.mp4" -type f
 - [ ] Старые папки `{userId}` переименованы или перемещены в `_orphaned`
 - [ ] Диагностический endpoint `/api/diag/storage` показывает правильные пути
 
+

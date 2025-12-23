@@ -1,0 +1,19 @@
+# robots.txt для Shorts AI Studio
+
+User-agent: *
+Allow: /
+Allow: /auth
+Allow: /privacy
+
+# Запрещаем индексацию приватных страниц
+Disallow: /channels
+Disallow: /channels/new
+Disallow: /channels/*/edit
+Disallow: /channels/*/generate
+
+# Sitemap
+Sitemap: https://shortsai.ru/sitemap.xml
+
+# Crawl-delay (опционально, для снижения нагрузки)
+Crawl-delay: 1
+

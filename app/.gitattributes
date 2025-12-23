@@ -1,0 +1,13 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts should always use LF
+*.sh text eol=lf
+
+# Batch files should use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell scripts can use either, but prefer LF
+*.ps1 text eol=lf
+
