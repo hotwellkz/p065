@@ -60,6 +60,29 @@ const normalizeOrigin = (origin: string | undefined): string | undefined => {
 
 const frontendOrigin = normalizeOrigin(process.env.FRONTEND_ORIGIN) ?? "https://shortsai.ru";
 
+// Разрешенные origins для CORS
+const allowedOrigins = [
+  "https://shortsai.ru",
+  "https://www.shortsai.ru",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:8080"
+];
+
+// Добавляем origins из env, если указаны
+if (frontendOrigin && !allowedOrigins.includes(frontendOrigin)) {
+  allowedOrigins.push(frontendOrigin);
+  // Если в env указано несколько origins через запятую, добавляем их все
+  if (frontendOrigin.includes(",")) {
+    const envOrigins = frontendOrigin.split(",").map(o => o.trim());
+    envOrigins.forEach(origin => {
+      if (!allowedOrigins.includes(origin)) {
+        allowedOrigins.push(origin);
+      }
+    });
+  }
+}
+
 // CORS middleware - настраиваем ОДИН РАЗ
 // Nginx больше не добавляет CORS заголовки, все обрабатывается здесь
 app.use(
@@ -72,53 +95,48 @@ app.use(
       
       // Нормализуем origin (убираем завершающий слеш)
       const normalizedOrigin = origin.replace(/\/+$/, "");
-      const normalizedFrontendOrigin = frontendOrigin.replace(/\/+$/, "");
       
-      // Логирование для отладки (только если origin не совпадает)
-      if (normalizedOrigin !== normalizedFrontendOrigin) {
-        console.log(`[CORS] Проверка origin: "${normalizedOrigin}" vs "${normalizedFrontendOrigin}"`);
+      // Проверяем, есть ли origin в списке разрешенных
+      const isAllowed = allowedOrigins.some(allowed => {
+        const normalizedAllowed = allowed.replace(/\/+$/, "");
+        return normalizedOrigin === normalizedAllowed || 
+               normalizedOrigin + "/" === normalizedAllowed ||
+               normalizedAllowed + "/" === normalizedOrigin;
+      });
+      
+      if (isAllowed) {
+        return callback(null, true);
       }
       
       // Поддержка wildcard для Netlify доменов (*.netlify.app)
-      if (normalizedFrontendOrigin.includes("*")) {
-        const pattern = normalizedFrontendOrigin.replace(/\*/g, ".*");
+      const wildcardOrigins = allowedOrigins.filter(o => o.includes("*"));
+      for (const wildcardOrigin of wildcardOrigins) {
+        const pattern = wildcardOrigin.replace(/\*/g, ".*");
         const regex = new RegExp(`^${pattern}$`);
         if (regex.test(normalizedOrigin)) {
           return callback(null, true);
         }
       }
       
-      // Разрешаем запросы с нормализованного origin
-      if (normalizedOrigin === normalizedFrontendOrigin) {
-        return callback(null, true);
-      }
-      
-      // Также разрешаем запросы с завершающим слешом для совместимости
-      if (normalizedOrigin + "/" === normalizedFrontendOrigin || 
-          normalizedOrigin === normalizedFrontendOrigin + "/") {
-        return callback(null, true);
-      }
-      
-      // Поддержка множественных доменов через запятую
-      if (normalizedFrontendOrigin.includes(",")) {
-        const allowedOrigins = normalizedFrontendOrigin.split(",").map(o => o.trim());
-        if (allowedOrigins.some(allowed => {
-          const normalizedAllowed = allowed.replace(/\/+$/, "");
-          return normalizedOrigin === normalizedAllowed || 
-                 normalizedOrigin + "/" === normalizedAllowed ||
-                 normalizedAllowed + "/" === normalizedOrigin;
-        })) {
-          return callback(null, true);
-        }
-      }
-      
       // Логирование отклоненного origin
-      console.error(`[CORS] Origin отклонен: "${normalizedOrigin}" (ожидается: "${normalizedFrontendOrigin}")`);
+      Logger.warn(`[CORS] Origin отклонен: "${normalizedOrigin}"`, {
+        allowedOrigins,
+        frontendOrigin
+      });
       callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type"]
+    allowedHeaders: [
+      "Authorization",
+      "Content-Type",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "Access-Control-Request-Method",
+      "Access-Control-Request-Headers"
+    ],
+    exposedHeaders: ["X-Request-ID", "X-App-Instance", "X-App-Version"]
   })
 );
 // Увеличиваем лимит размера тела запроса для импорта каналов (до 10MB)

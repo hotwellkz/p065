@@ -32,7 +32,7 @@ function cleanFolderId(folderId: string): string {
  * Обрабатывает файл из Google Drive: генерирует описание, публикует через Blottata, перемещает в архив
  */
 export async function processBlottataFile(
-  channel: Channel,
+  channel: Channel & { ownerId?: string },
   fileId: string
 ): Promise<ProcessedFile> {
   const result: ProcessedFile = {
@@ -96,11 +96,13 @@ export async function processBlottataFile(
     });
 
     // 4. Публикуем на все настроенные платформы
+    const userId = channel.ownerId;
     const publishResults = await blottataPublisherService.publishToAllPlatforms({
       channel,
       mediaUrl,
       description,
-      title: normalizedTitle
+      title: normalizedTitle,
+      userId
     });
 
     // Анализируем результаты

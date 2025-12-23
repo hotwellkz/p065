@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { Logger } from "../utils/logger";
 import type { Channel } from "../types/channel";
 import { normalizeYoutubeTitle } from "../utils/youtubeTitleNormalizer";
+import { getBlottataApiKey, requireBlottataApiKey } from "../utils/blottataApiKey";
 
 interface BlottataPlatformIds {
   youtubeId?: string | null;
@@ -29,6 +30,7 @@ interface BlottataPublishOptions {
   mediaUrl: string;
   description: string;
   title?: string;
+  userId?: string; // ID пользователя для получения account default API key
 }
 
 /**
@@ -85,7 +87,15 @@ export class BlottataPublisherService {
     }
 
     try {
-      Logger.info("BlottataPublisherService: Uploading media", { mediaUrl });
+      // Маскируем ключ для логирования
+      const keyMask = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "****";
+      
+      Logger.info("BlottataPublisherService: Uploading media", { 
+        mediaUrl,
+        keyMask,
+        keyLength: key.length,
+        keyPrefix: key.substring(0, 10)
+      });
 
       const response = await this.httpClient.post(
         "/media",
@@ -107,11 +117,31 @@ export class BlottataPublisherService {
 
       return response.data.url;
     } catch (error: any) {
+      const keyMask = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "****";
+      
       Logger.error("BlottataPublisherService: Failed to upload media", {
         error: error?.message || String(error),
         status: error?.response?.status,
-        data: error?.response?.data
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        keyMask,
+        keyLength: key.length,
+        keyPrefix: key.substring(0, 10),
+        mediaUrl
       });
+      
+      // Детальная диагностика для 401 ошибки
+      if (error?.response?.status === 401) {
+        Logger.error("BlottataPublisherService: 401 Unauthorized - API key issue", {
+          keyMask,
+          keyLength: key.length,
+          keyStartsWith: key.substring(0, 4),
+          keyEndsWith: key.substring(key.length - 4),
+          responseData: error?.response?.data,
+          suggestion: "Check if API key is valid and not expired"
+        });
+      }
+      
       throw new Error(
         `BLOTATA_MEDIA_UPLOAD_FAILED: ${error?.response?.data?.message || error?.message || "Unknown error"}`
       );
@@ -124,9 +154,19 @@ export class BlottataPublisherService {
   async publishToYouTube(
     options: BlottataPublishOptions
   ): Promise<BlottataPublishResult> {
-    const { channel, mediaUrl, description, title } = options;
+    const { channel, mediaUrl, description, title, userId } = options;
     const platformIds = this.getPlatformIds(channel);
-    const apiKey = channel.blotataApiKey || this.apiKey;
+    
+    // Получаем API key с правильным приоритетом
+    const apiKeyResult = await getBlottataApiKey(channel, userId);
+    if (!apiKeyResult) {
+      return {
+        platform: "youtube",
+        success: false,
+        error: "Blottata API key not configured"
+      };
+    }
+    const apiKey = apiKeyResult.apiKey;
 
     if (!platformIds.youtubeId) {
       return {
@@ -191,7 +231,9 @@ export class BlottataPublisherService {
         channelId: channel.id,
         error: error?.message || String(error),
         status: error?.response?.status,
-        data: error?.response?.data
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        apiKeySource: apiKeyResult.source
       });
 
       return {
@@ -208,9 +250,19 @@ export class BlottataPublisherService {
   async publishToTikTok(
     options: BlottataPublishOptions
   ): Promise<BlottataPublishResult> {
-    const { channel, mediaUrl, description } = options;
+    const { channel, mediaUrl, description, userId } = options;
     const platformIds = this.getPlatformIds(channel);
-    const apiKey = channel.blotataApiKey || this.apiKey;
+    
+    // Получаем API key с правильным приоритетом
+    const apiKeyResult = await getBlottataApiKey(channel, userId);
+    if (!apiKeyResult) {
+      return {
+        platform: "tiktok",
+        success: false,
+        error: "Blottata API key not configured"
+      };
+    }
+    const apiKey = apiKeyResult.apiKey;
 
     if (!platformIds.tiktokId) {
       return {
@@ -276,7 +328,9 @@ export class BlottataPublisherService {
         channelId: channel.id,
         error: error?.message || String(error),
         status: error?.response?.status,
-        data: error?.response?.data
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        apiKeySource: apiKeyResult.source
       });
 
       return {
@@ -293,9 +347,19 @@ export class BlottataPublisherService {
   async publishToInstagram(
     options: BlottataPublishOptions
   ): Promise<BlottataPublishResult> {
-    const { channel, mediaUrl, description } = options;
+    const { channel, mediaUrl, description, userId } = options;
     const platformIds = this.getPlatformIds(channel);
-    const apiKey = channel.blotataApiKey || this.apiKey;
+    
+    // Получаем API key с правильным приоритетом
+    const apiKeyResult = await getBlottataApiKey(channel, userId);
+    if (!apiKeyResult) {
+      return {
+        platform: "instagram",
+        success: false,
+        error: "Blottata API key not configured"
+      };
+    }
+    const apiKey = apiKeyResult.apiKey;
 
     if (!platformIds.instagramId) {
       return {
@@ -354,7 +418,9 @@ export class BlottataPublisherService {
         channelId: channel.id,
         error: error?.message || String(error),
         status: error?.response?.status,
-        data: error?.response?.data
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        apiKeySource: apiKeyResult.source
       });
 
       return {
@@ -371,17 +437,24 @@ export class BlottataPublisherService {
   async publishToAllPlatforms(
     options: BlottataPublishOptions
   ): Promise<BlottataPublishResult[]> {
-    const { channel, mediaUrl, description, title } = options;
+    const { channel, mediaUrl, description, title, userId } = options;
     const platformIds = this.getPlatformIds(channel);
     const results: BlottataPublishResult[] = [];
+
+    // Получаем API key с правильным приоритетом (fail-fast)
+    const apiKeyResult = await requireBlottataApiKey(channel, userId);
 
     // Сначала загружаем медиа в Blottata
     let blotataMediaUrl: string;
     try {
-      blotataMediaUrl = await this.uploadMedia(mediaUrl, channel.blotataApiKey || undefined);
+      blotataMediaUrl = await this.uploadMedia(mediaUrl, apiKeyResult.apiKey);
     } catch (error: any) {
       Logger.error("BlottataPublisherService: Failed to upload media, aborting all publications", {
-        error: error?.message || String(error)
+        error: error?.message || String(error),
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        apiKeySource: apiKeyResult.source
       });
       // Возвращаем ошибку для всех платформ
       if (platformIds.youtubeId) {

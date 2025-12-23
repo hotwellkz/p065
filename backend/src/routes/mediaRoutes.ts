@@ -12,9 +12,81 @@ const router = Router();
  * GET /api/media/:userSlug/:channelSlug/:fileName
  * 
  * Безопасно отдаёт файлы только из STORAGE_ROOT, предотвращая path traversal
- * Структура: STORAGE_ROOT/userSlug/channelSlug/fileName
+ * Структура: STORAGE_ROOT/users/{userSlug}/channels/{channelSlug}/inbox/{fileName}
  * Поддерживает Range-запросы для потоковой передачи больших файлов
  */
+// Поддержка HEAD запросов для проверки доступности файла
+router.head("/:userSlug/:channelSlug/:fileName", async (req, res) => {
+  const { userSlug, channelSlug, fileName } = req.params;
+  
+  try {
+    // Используем ту же логику поиска файла, что и в GET
+    if (!userSlug || !channelSlug || !fileName) {
+      return res.status(400).end();
+    }
+
+    if (userSlug.includes("..") || channelSlug.includes("..") || fileName.includes("..") || 
+        userSlug.includes("/") || channelSlug.includes("/") || fileName.includes("/")) {
+      return res.status(400).end();
+    }
+
+    const storageRoot = process.env.STORAGE_ROOT || path.resolve(process.cwd(), 'storage/videos');
+    const inboxPath = path.join(storageRoot, 'users', userSlug, 'channels', channelSlug, 'inbox', fileName);
+    const rootPath = path.join(storageRoot, 'users', userSlug, 'channels', channelSlug, fileName);
+    const legacyPath = path.join(storageRoot, userSlug, channelSlug, fileName);
+    
+    let filePath: string | null = null;
+    let fileExists = false;
+    
+    for (const testPath of [inboxPath, rootPath, legacyPath]) {
+      try {
+        await fs.access(testPath);
+        const stats = await fs.stat(testPath);
+        if (stats.isFile()) {
+          filePath = testPath;
+          fileExists = true;
+          break;
+        }
+      } catch {
+        // Продолжаем поиск
+      }
+    }
+    
+    if (!fileExists || !filePath) {
+      return res.status(404).end();
+    }
+
+    const stats = await fs.stat(filePath);
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      ".mp4": "video/mp4",
+      ".mov": "video/quicktime",
+      ".avi": "video/x-msvideo",
+      ".mkv": "video/x-matroska",
+      ".webm": "video/webm",
+      ".m4v": "video/x-m4v"
+    };
+    const contentType = mimeTypes[ext] || "application/octet-stream";
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", stats.size);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    
+    return res.status(200).end();
+  } catch (error: any) {
+    Logger.error("MediaRoutes: HEAD request error", {
+      userSlug,
+      channelSlug,
+      fileName,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    if (!res.headersSent) {
+      return res.status(500).end();
+    }
+  }
+});
+
 router.get("/:userSlug/:channelSlug/:fileName", async (req, res) => {
   const { userSlug, channelSlug, fileName } = req.params;
   const startTime = Date.now();
@@ -49,8 +121,42 @@ router.get("/:userSlug/:channelSlug/:fileName", async (req, res) => {
     // Получаем STORAGE_ROOT
     const storageRoot = process.env.STORAGE_ROOT || path.resolve(process.cwd(), 'storage/videos');
     
-    // Формируем безопасный путь: STORAGE_ROOT/userSlug/channelSlug/fileName
-    const filePath = path.join(storageRoot, userSlug, channelSlug, fileName);
+    // Формируем безопасный путь: STORAGE_ROOT/users/{userSlug}/channels/{channelSlug}/inbox/{fileName}
+    // Пробуем сначала inbox (новые файлы), затем корень канала (для обратной совместимости)
+    const inboxPath = path.join(storageRoot, 'users', userSlug, 'channels', channelSlug, 'inbox', fileName);
+    const rootPath = path.join(storageRoot, 'users', userSlug, 'channels', channelSlug, fileName);
+    const legacyPath = path.join(storageRoot, userSlug, channelSlug, fileName);
+    
+    // Проверяем существование файла в разных местах
+    let filePath: string | null = null;
+    let fileExists = false;
+    
+    // Приоритет: inbox > root > legacy
+    for (const testPath of [inboxPath, rootPath, legacyPath]) {
+      try {
+        await fs.access(testPath);
+        const stats = await fs.stat(testPath);
+        if (stats.isFile()) {
+          filePath = testPath;
+          fileExists = true;
+          Logger.info("MediaRoutes: File found", {
+            userSlug,
+            channelSlug,
+            fileName,
+            foundAt: testPath === inboxPath ? 'inbox' : testPath === rootPath ? 'root' : 'legacy',
+            filePath: testPath
+          });
+          break;
+        }
+      } catch {
+        // Продолжаем поиск
+      }
+    }
+    
+    // Если файл не найден, используем inbox как основной путь для логирования ошибки
+    if (!filePath) {
+      filePath = inboxPath;
+    }
 
     // Логируем вычисленный путь
     Logger.info("MediaRoutes: Path calculation", {
@@ -79,33 +185,26 @@ router.get("/:userSlug/:channelSlug/:fileName", async (req, res) => {
       return res.status(403).json({ error: "Access denied" });
     }
 
-    // Проверяем существование файла
-    let fileExists = false;
-    try {
-      await fs.access(filePath);
-      fileExists = true;
-      Logger.info("MediaRoutes: File exists", {
-        userSlug,
-        channelSlug,
-        fileName,
-        filePath,
-        exists: true
-      });
-    } catch (accessError) {
-      fileExists = false;
+    // Если файл не найден, возвращаем 404
+    if (!fileExists || !filePath) {
       Logger.warn("MediaRoutes: File not found", {
         userSlug,
         channelSlug,
         fileName,
-        filePath,
-        exists: false,
-        error: accessError instanceof Error ? accessError.message : String(accessError),
-        storageRoot,
-        resolvedPath
+        searchedPaths: {
+          inbox: inboxPath,
+          root: rootPath,
+          legacy: legacyPath
+        },
+        storageRoot
       });
       return res.status(404).json({ 
         error: "File not found",
-        path: filePath,
+        searchedPaths: {
+          inbox: inboxPath,
+          root: rootPath,
+          legacy: legacyPath
+        },
         storageRoot
       });
     }
