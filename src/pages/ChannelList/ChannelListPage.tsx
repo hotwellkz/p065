@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Plus, Video, Wand2, Calendar, MoreVertical, Bell, Grid3x3, List, User, LogOut, Search, X, AlignJustify, Play, Edit2, Download, Upload, Music } from "lucide-react";
+import { Loader2, Plus, Video, Wand2, Calendar, MoreVertical, Bell, Grid3x3, List, User, LogOut, Search, X, AlignJustify, Play, Edit2, Download, Upload, Music, ChevronDown } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   DndContext,
@@ -76,6 +76,8 @@ const ChannelListPage = () => {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [runningMusicClips, setRunningMusicClips] = useState<Set<string>>(new Set());
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   
   // Состояние для фильтра по типу канала
   const [channelTypeFilter, setChannelTypeFilter] = useState<ChannelType | "all">(() => {
@@ -87,6 +89,11 @@ const ChannelListPage = () => {
     const saved = localStorage.getItem("channels-type-filter");
     return (saved === "shorts" || saved === "music_clips" || saved === "all") ? saved : "all";
   });
+
+  // Вычисляем activeMode на основе фильтра
+  const activeMode: "shorts" | "music_clips" | "all" = 
+    channelTypeFilter === "music_clips" ? "music_clips" :
+    channelTypeFilter === "shorts" ? "shorts" : "all";
 
   // Обновляем фильтр при изменении пути
   useEffect(() => {
@@ -131,8 +138,23 @@ const ChannelListPage = () => {
       console.log("[ChannelListPage] Channel types:", types);
       console.log("[ChannelListPage] Current filter:", channelTypeFilter);
       console.log("[ChannelListPage] Location pathname:", location.pathname);
+      console.log("[ChannelListPage] Active mode:", activeMode);
     }
-  }, [channels, channelTypeFilter, location.pathname]);
+  }, [channels, channelTypeFilter, location.pathname, activeMode]);
+
+  // Закрываем dropdown при клике вне его
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
+        setShowMoreMenu(false);
+      }
+    };
+
+    if (showMoreMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showMoreMenu]);
 
   // Функция для фильтрации каналов по типу и поисковому запросу
   const filteredChannels = localChannels.filter((channel) => {
@@ -362,7 +384,12 @@ const ChannelListPage = () => {
   };
 
   const goToWizard = () => {
-    navigate("/channels/new");
+    // В зависимости от activeMode открываем соответствующий мастер
+    if (activeMode === "music_clips") {
+      navigate("/music-clips/new");
+    } else {
+      navigate("/channels/new");
+    }
   };
 
   const goToEdit = (channelId: string) => {
@@ -600,70 +627,161 @@ const ChannelListPage = () => {
             </div>
 
             {/* Правая часть: кнопки, переключатели, аватар */}
-            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
-              {/* Группа основных кнопок */}
-              <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end max-w-full">
+              {/* Группа основных кнопок - адаптивная с dropdown */}
+              <div className="flex items-center gap-1.5 flex-wrap max-w-full">
+                {/* Кнопка Создать - всегда видна */}
                 <button
                   type="button"
                   onClick={goToWizard}
-                  className="premium-btn-primary inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white lg:px-3.5 lg:py-2 lg:text-sm"
+                  className="premium-btn-primary inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold text-white lg:px-3.5 lg:py-2 lg:text-sm flex-shrink-0"
                 >
                   <Plus size={14} className="lg:w-4 lg:h-4" />
                   <span className="hidden lg:inline">Создать</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigate("/music-clips");
-                    setChannelTypeFilter("music_clips");
-                  }}
-                  className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm"
-                  title="Music Clips"
-                >
-                  <Music size={14} className="lg:w-4 lg:h-4" />
-                  <span className="hidden xl:inline">Music Clips</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate("/channels/schedule")}
-                  className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm"
-                  title="Расписание"
-                >
-                  <Calendar size={14} className="lg:w-4 lg:h-4" />
-                  <span className="hidden xl:inline">Расписание</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate("/scripts")}
-                  className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm"
-                  title="Генератор"
-                >
-                  <Wand2 size={14} className="lg:w-4 lg:h-4" />
-                  <span className="hidden xl:inline">Генератор</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExport}
-                  disabled={isExporting || channels.length === 0}
-                  className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Экспорт каналов"
-                >
-                  {isExporting ? (
-                    <Loader2 size={14} className="lg:w-4 lg:h-4 animate-spin" />
-                  ) : (
-                    <Download size={14} className="lg:w-4 lg:h-4" />
+                
+                {/* Основные кнопки - видимые на десктопе */}
+                <div className="hidden lg:flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigate("/music-clips");
+                      setChannelTypeFilter("music_clips");
+                    }}
+                    className={`premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm flex-shrink-0 ${
+                      activeMode === "music_clips" ? "bg-brand/20 border-brand/30" : ""
+                    }`}
+                    title="Music Clips"
+                  >
+                    <Music size={14} className="lg:w-4 lg:h-4" />
+                    <span className="hidden xl:inline">Music Clips</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate("/channels/schedule")}
+                    className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm flex-shrink-0"
+                    title="Расписание"
+                  >
+                    <Calendar size={14} className="lg:w-4 lg:h-4" />
+                    <span className="hidden xl:inline">Расписание</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate("/scripts")}
+                    className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm flex-shrink-0"
+                    title="Генератор"
+                  >
+                    <Wand2 size={14} className="lg:w-4 lg:h-4" />
+                    <span className="hidden xl:inline">Генератор</span>
+                  </button>
+                </div>
+
+                {/* Dropdown "Ещё" для узких экранов и дополнительных кнопок */}
+                <div className="relative" ref={moreMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowMoreMenu(!showMoreMenu)}
+                    className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm flex-shrink-0 lg:hidden"
+                    title="Ещё"
+                  >
+                    <MoreVertical size={14} className="lg:w-4 lg:h-4" />
+                  </button>
+                  
+                  {/* Кнопки, которые всегда в dropdown на мобильных, но видны на десктопе */}
+                  <div className="hidden lg:flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleExport}
+                      disabled={isExporting || channels.length === 0}
+                      className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                      title="Экспорт каналов"
+                    >
+                      {isExporting ? (
+                        <Loader2 size={14} className="lg:w-4 lg:h-4 animate-spin" />
+                      ) : (
+                        <Download size={14} className="lg:w-4 lg:h-4" />
+                      )}
+                      <span className="hidden xl:inline">Экспорт</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleImportClick}
+                      className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm flex-shrink-0"
+                      title="Импорт каналов"
+                    >
+                      <Upload size={14} className="lg:w-4 lg:h-4" />
+                      <span className="hidden xl:inline">Импорт</span>
+                    </button>
+                  </div>
+
+                  {/* Dropdown меню для мобильных */}
+                  {showMoreMenu && (
+                    <div className="absolute right-0 top-full mt-2 w-48 rounded-lg border border-white/20 bg-slate-900/95 backdrop-blur-sm p-2 shadow-xl z-50">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate("/music-clips");
+                          setChannelTypeFilter("music_clips");
+                          setShowMoreMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                      >
+                        <Music size={16} />
+                        Music Clips
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate("/channels/schedule");
+                          setShowMoreMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                      >
+                        <Calendar size={16} />
+                        Расписание
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate("/scripts");
+                          setShowMoreMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                      >
+                        <Wand2 size={16} />
+                        Генератор
+                      </button>
+                      <div className="my-2 border-t border-white/10" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleExport();
+                          setShowMoreMenu(false);
+                        }}
+                        disabled={isExporting || channels.length === 0}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isExporting ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Download size={16} />
+                        )}
+                        Экспорт
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleImportClick();
+                          setShowMoreMenu(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                      >
+                        <Upload size={16} />
+                        Импорт
+                      </button>
+                    </div>
                   )}
-                  <span className="hidden xl:inline">Экспорт</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleImportClick}
-                  className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm"
-                  title="Импорт каналов"
-                >
-                  <Upload size={14} className="lg:w-4 lg:h-4" />
-                  <span className="hidden xl:inline">Импорт</span>
-                </button>
+                </div>
               </div>
               {/* Переключатель раскладки Grid/List/Compact */}
               <div className="hidden md:flex items-center gap-0.5 rounded-xl premium-btn-secondary p-0.5">
@@ -875,6 +993,19 @@ const ChannelListPage = () => {
                       <button
                         type="button"
                         onClick={() => {
+                          goToWizard();
+                          setShowMobileMenu(false);
+                          setMenuPosition(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold text-white bg-brand/20 border border-brand/30 transition hover:bg-brand/30"
+                      >
+                        <Plus size={16} />
+                        Создать {activeMode === "music_clips" ? "Music Clips" : "Shorts"}
+                      </button>
+                      <div className="my-2 border-t border-white/10" />
+                      <button
+                        type="button"
+                        onClick={() => {
                           navigate("/notifications");
                           setShowMobileMenu(false);
                           setMenuPosition(null);
@@ -892,7 +1023,9 @@ const ChannelListPage = () => {
                           setShowMobileMenu(false);
                           setMenuPosition(null);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50 ${
+                          activeMode === "shorts" ? "bg-slate-800/50" : ""
+                        }`}
                       >
                         <Video size={16} />
                         Shorts
@@ -905,7 +1038,9 @@ const ChannelListPage = () => {
                           setShowMobileMenu(false);
                           setMenuPosition(null);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                        className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50 ${
+                          activeMode === "music_clips" ? "bg-slate-800/50" : ""
+                        }`}
                       >
                         <Music size={16} />
                         Music Clips
@@ -1145,21 +1280,22 @@ const ChannelListPage = () => {
         {!loading && channels.length === 0 && (
           <div className="rounded-3xl channels-premium-header p-10 text-center">
             <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full border border-white/10 bg-slate-900/50 backdrop-blur-sm text-brand-light shadow-lg">
-              <Video size={28} />
+              {activeMode === "music_clips" ? <Music size={28} /> : <Video size={28} />}
             </div>
             <h2 className="mt-6 text-2xl font-bold premium-title">
-              Каналы ещё не созданы
+              {activeMode === "music_clips" ? "Каналы Music Clips ещё не созданы" : "Каналы ещё не созданы"}
             </h2>
             <p className="mt-2 text-slate-300 premium-subtitle">
-              Пройдите мастер настройки, чтобы задать платформу, длительность,
-              аудиторию и тон, а затем начните генерацию сценариев.
+              {activeMode === "music_clips" 
+                ? "Создайте канал Music Clips, чтобы начать автоматическую генерацию музыкальных клипов."
+                : "Пройдите мастер настройки, чтобы задать платформу, длительность, аудиторию и тон, а затем начните генерацию сценариев."}
             </p>
             <button
               type="button"
               onClick={goToWizard}
               className="premium-btn-primary mt-6 rounded-2xl px-6 py-3 text-sm font-semibold text-white"
             >
-              Запустить мастер
+              {activeMode === "music_clips" ? "Создать Music Clips канал" : "Запустить мастер"}
             </button>
           </div>
         )}

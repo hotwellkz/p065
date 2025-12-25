@@ -97,6 +97,7 @@ export const channelRepository: ChannelRepository = {
     const tempChannel: Channel = {
       id: "", // Временный id, будет заменён Firestore
       name: data.name,
+      type: data.type || "shorts", // Поддержка типа канала
       platform: data.platform,
       language: data.language,
       targetDurationSec: data.targetDurationSec,
@@ -110,10 +111,10 @@ export const channelRepository: ChannelRepository = {
       telegramAutoScheduleEnabled: data.telegramAutoScheduleEnabled ?? false,
       // Для новых каналов: autoSendEnabled по умолчанию true, если не указано явно
       autoSendEnabled: data.autoSendEnabled !== undefined ? data.autoSendEnabled : true,
-      // Создаём 4 расписания по умолчанию, если расписаний нет
-      autoSendSchedules: data.autoSendSchedules && data.autoSendSchedules.length > 0 
+      // Создаём 4 расписания по умолчанию, если расписаний нет (только для shorts)
+      autoSendSchedules: data.type === "music_clips" ? [] : (data.autoSendSchedules && data.autoSendSchedules.length > 0 
         ? data.autoSendSchedules 
-        : createDefaultSchedules(),
+        : createDefaultSchedules()),
       // Для новых каналов: autoDownloadToDriveEnabled по умолчанию true, если не указано явно
       autoDownloadToDriveEnabled: data.autoDownloadToDriveEnabled !== undefined ? data.autoDownloadToDriveEnabled : true,
       autoDownloadDelayMinutes: data.autoDownloadDelayMinutes ?? 10,
@@ -134,7 +135,9 @@ export const channelRepository: ChannelRepository = {
       instagramUrl: data.instagramUrl,
       googleDriveFolderId: data.googleDriveFolderId,
       // Для новых каналов: timezone по умолчанию "Asia/Almaty", если не указано явно
-      timezone: data.timezone || "Asia/Almaty"
+      timezone: data.timezone || "Asia/Almaty",
+      // Настройки Music Clips
+      musicClipsSettings: data.musicClipsSettings
     };
     
     // addDoc с конвертером автоматически вызовет toFirestore(), который отфильтрует undefined

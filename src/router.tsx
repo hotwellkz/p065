@@ -10,6 +10,7 @@ import AuthPage from "./pages/Auth/AuthPage";
 import LandingPage from "./pages/Landing/LandingPage";
 import ChannelListPage from "./pages/ChannelList/ChannelListPage";
 import ChannelWizardPage from "./pages/ChannelWizard/ChannelWizardPage";
+import MusicClipsWizardPage from "./pages/MusicClipsWizard/MusicClipsWizardPage";
 import ChannelEditPage from "./pages/ChannelEdit/ChannelEditPage";
 import ChannelSchedulePage from "./pages/ChannelSchedule/ChannelSchedulePage";
 import ScriptGenerationPage from "./pages/ScriptGeneration/ScriptGenerationPage";
@@ -103,6 +104,14 @@ const AppRouter = () => {
       element={
         <PrivateRoute>
           <ChannelListPage />
+        </PrivateRoute>
+      }
+    />
+    <Route
+      path="/music-clips/new"
+      element={
+        <PrivateRoute>
+          <MusicClipsWizardPage />
         </PrivateRoute>
       }
     />
