@@ -11,6 +11,8 @@ export type GenerationMode = "script" | "prompt" | "video-prompt-only";
 
 export type GenerationTransport = "telegram_global" | "telegram_user";
 
+export type ChannelType = "shorts" | "music_clips";
+
 export type PreferencesMode = "cyclic" | "random" | "fixed";
 
 export interface PreferenceVariant {
@@ -34,9 +36,27 @@ export interface ChannelAutoSendSchedule {
   lastRunAt?: string | null;
 }
 
+export interface MusicClipsSettings {
+  targetDurationSec: number; // Целевая длительность финального видео (например 60)
+  clipSec: number; // Длительность одного сегмента (по умолчанию 10)
+  segmentDelayMs: number; // Задержка между запусками сегментов (по умолчанию 30000)
+  maxParallelSegments: number; // Максимум параллельных сегментов (по умолчанию 1)
+  maxRetries: number; // Максимум попыток для сегмента (по умолчанию 3)
+  retryDelayMs: number; // Задержка между ретраями (по умолчанию 60000)
+  sunoPrompt: string; // Промпт для генерации музыки через Suno
+  styleTags?: string[]; // Опциональные теги стиля для Suno
+  platforms?: {
+    youtube?: boolean;
+    tiktok?: boolean;
+    instagram?: boolean;
+  };
+  language?: string; // Опциональный язык
+}
+
 export interface Channel {
   id: string;
   name: string;
+  type?: ChannelType; // Тип канала: "shorts" (по умолчанию) или "music_clips"
   platform: SupportedPlatform;
   language: SupportedLanguage;
   targetDurationSec: number;
@@ -66,6 +86,7 @@ export interface Channel {
   blotataPinterestId?: string;
   blotataPinterestBoardId?: string;
   blotataBlueskyId?: string;
+  musicClipsSettings?: MusicClipsSettings; // Настройки для каналов типа music_clips
   createdAt?: any;
   updatedAt?: any;
 }

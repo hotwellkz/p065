@@ -1632,37 +1632,70 @@ export async function downloadAndSaveToLocal(
         promptLength: prompt?.length || 0
       });
       
-      // Используем ЕДИНУЮ функцию генерации имени файла (для manual и auto)
-      const { buildVideoBaseName, resolveCollision } = await import("../utils/videoFilename");
-      const nameResult = await buildVideoBaseName({
-        promptText: prompt || null,
-        uiTitle: videoTitle || effectiveTitle || null,
-        channelName: channelData.name || null
-      });
+      // ВАЖНО: Для автоматизации (mode === "auto") используем СТРОГО video_<shortId>.mp4
+      // Для ручного режима (mode === "manual") можно использовать title-based имена
+      let fileBaseName: string;
+      let nameResult: { baseName: string; source: string; rawTitle?: string; reason?: string } | null = null;
       
-      // Генерируем уникальное имя с проверкой коллизий (БЕЗ timestamp, только _2, _3 и т.д.)
-      const fileBaseName = await resolveCollision(inboxDir, nameResult.baseName, ".mp4");
-
-      // Проверяем, использовался ли суффикс коллизии
-      const collisionSuffixUsed = fileBaseName !== nameResult.baseName;
-      
-      Logger.info(`downloadAndSaveToLocal [${mode}]: generated file name`, {
-        mode,
-        videoTitle: videoTitle || "not provided",
-        effectiveTitle: effectiveTitle || "not provided",
-        effectiveTitleLength: effectiveTitle?.length || 0,
-        baseNameSource: nameResult.source,
-        rawInputKind: videoTitle || effectiveTitle ? "uiTitle" : "prompt",
-        rawTitle: nameResult.rawTitle || "not provided",
-        baseName: nameResult.baseName,
-        baseNameLength: nameResult.baseName.length,
-        finalBaseName: fileBaseName,
-        finalBaseNameLength: fileBaseName.length,
-        collisionSuffixUsed,
-        reason: nameResult.reason || "none",
-        videoId,
-        inboxDir
-      });
+      if (mode === "auto") {
+        // АВТОМАТИЗАЦИЯ: строго video_<shortId>.mp4
+        const { generateVideoFilename } = await import("../utils/videoFilename");
+        const fullFileName = await generateVideoFilename({
+          source: "videoDownloadService_auto",
+          channelId,
+          userId,
+          targetDir: inboxDir
+        });
+        // Убираем расширение .mp4, так как resolveInboxPath добавит его
+        fileBaseName = fullFileName.replace(/\.mp4$/i, '');
+        
+        // Создаём nameResult для совместимости с метаданными
+        nameResult = {
+          baseName: fileBaseName,
+          source: "automation",
+          rawTitle: fileBaseName,
+          reason: "automation_requires_video_shortid_format"
+        };
+        
+        Logger.info(`[FILENAME] Using unified format for automation`, {
+          mode,
+          channelId,
+          userId,
+          generatedFileName: fullFileName,
+          fileBaseName,
+          rule: "automation_requires_video_shortid_format"
+        });
+      } else {
+        // РУЧНОЙ РЕЖИМ: можно использовать title-based имена
+        const { buildVideoBaseName, resolveCollision } = await import("../utils/videoFilename");
+        nameResult = await buildVideoBaseName({
+          promptText: prompt || null,
+          uiTitle: videoTitle || effectiveTitle || null,
+          channelName: channelData.name || null
+        });
+        
+        fileBaseName = await resolveCollision(inboxDir, nameResult.baseName, ".mp4");
+        const collisionSuffixUsed = fileBaseName !== nameResult.baseName;
+        
+        Logger.info(`downloadAndSaveToLocal [${mode}]: generated file name (manual mode)`, {
+          mode,
+          videoTitle: videoTitle || "not provided",
+          effectiveTitle: effectiveTitle || "not provided",
+          effectiveTitleLength: effectiveTitle?.length || 0,
+          baseNameSource: nameResult.source,
+          rawInputKind: videoTitle || effectiveTitle ? "uiTitle" : "prompt",
+          rawTitle: nameResult.rawTitle || "not provided",
+          baseName: nameResult.baseName,
+          baseNameLength: nameResult.baseName.length,
+          finalBaseName: fileBaseName,
+          finalBaseNameLength: fileBaseName.length,
+          collisionSuffixUsed,
+          reason: nameResult.reason || "none",
+          videoId,
+          inboxDir,
+          rule: "manual_mode_allows_title_based_names"
+        });
+      }
 
       // Получаем пути для inbox
       const inboxPath = storage.resolveInboxPath(userFolderKey, channelFolderKey, fileBaseName);
@@ -1721,7 +1754,7 @@ export async function downloadAndSaveToLocal(
           channelId,
           originalTitle: videoTitle || null,
           effectiveTitle: effectiveTitle || null,
-          safeFileBase: nameResult.baseName,
+          safeFileBase: fileBaseName,
           finalFileBase: fileBaseName,
           mp4File: `${fileBaseName}.mp4`,
           jsonFile: `${fileBaseName}.json`,

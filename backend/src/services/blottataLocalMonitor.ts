@@ -257,15 +257,55 @@ export async function processNewFilesForChannel(channel: Channel & { ownerId?: s
         // Lock-файла нет, продолжаем
       }
 
-      // Проверяем, был ли файл уже обработан
-      const processedCheck = await isFileProcessed(channel.id, file.fileName);
+      // ВАЖНО: Проверяем и нормализуем имя файла, если оно title-based
+      let finalFileName = file.fileName;
+      let normalized = false;
+      
+      try {
+        const { isTitleBasedFilename, normalizeIncomingFilename } = await import("../utils/videoFilename");
+        
+        if (isTitleBasedFilename(file.fileName)) {
+          // Файл с неправильным именем - нормализуем
+          Logger.warn("blottataLocalMonitor: Detected title-based filename, normalizing", {
+            channelId: channel.id,
+            oldFileName: file.fileName,
+            filePath: file.filePath
+          });
+          
+          finalFileName = await normalizeIncomingFilename(
+            file.filePath,
+            file.fileName,
+            inputDir,
+            channel.id,
+            channel.ownerId
+          );
+          normalized = true;
+          
+          Logger.info("blottataLocalMonitor: File normalized successfully", {
+            channelId: channel.id,
+            oldFileName: file.fileName,
+            newFileName: finalFileName
+          });
+        }
+      } catch (normalizeError: any) {
+        Logger.error("blottataLocalMonitor: Failed to normalize filename, continuing with original", {
+          channelId: channel.id,
+          fileName: file.fileName,
+          error: normalizeError?.message || String(normalizeError)
+        });
+        // Продолжаем с оригинальным именем
+      }
+
+      // Проверяем, был ли файл уже обработан (используем финальное имя после нормализации)
+      const processedCheck = await isFileProcessed(channel.id, finalFileName);
       if (processedCheck.processed) {
         const processedDate = processedCheck.processedAt 
           ? new Date(processedCheck.processedAt).toISOString() 
           : 'unknown';
         Logger.info("blottataLocalMonitor: File already processed, skipping", {
           channelId: channel.id,
-          fileName: file.fileName,
+          fileName: finalFileName,
+          originalFileName: normalized ? file.fileName : undefined,
           source: processedCheck.source,
           processedAt: processedDate
         });
@@ -290,29 +330,34 @@ export async function processNewFilesForChannel(channel: Channel & { ownerId?: s
       }
 
       try {
-        // Обрабатываем файл - передаём новые пути через StorageService
+        // Обрабатываем файл - используем финальное имя (после нормализации, если была)
+        const finalFilePath = path.join(inputDir, finalFileName);
         const processResult = await processBlottataLocalFile(
           channel, 
           userEmail,
-          file.fileName, 
-          path.join(inputDir, file.fileName)
+          finalFileName, 
+          finalFilePath
         );
 
         if (processResult.success) {
-          // Помечаем файл как обработанный
-          await markFileAsProcessed(channel.id, file.fileName);
+          // Помечаем файл как обработанный (используем финальное имя)
+          await markFileAsProcessed(channel.id, finalFileName);
           result.processed++;
 
           Logger.info("blottataLocalMonitor: File processed successfully", {
             channelId: channel.id,
-            fileName: file.fileName,
+            fileName: finalFileName,
+            originalFileName: normalized ? file.fileName : undefined,
+            normalized,
             publishedPlatforms: processResult.publishedPlatforms
           });
         } else {
           result.errors++;
           Logger.error("blottataLocalMonitor: File processing failed", {
             channelId: channel.id,
-            fileName: file.fileName,
+            fileName: finalFileName,
+            originalFileName: normalized ? file.fileName : undefined,
+            normalized,
             errors: processResult.errors
           });
         }
@@ -320,7 +365,9 @@ export async function processNewFilesForChannel(channel: Channel & { ownerId?: s
         result.errors++;
         Logger.error("blottataLocalMonitor: Error processing file", {
           channelId: channel.id,
-          fileName: file.fileName,
+          fileName: finalFileName,
+          originalFileName: normalized ? file.fileName : undefined,
+          normalized,
           error: error?.message || String(error)
         });
       } finally {

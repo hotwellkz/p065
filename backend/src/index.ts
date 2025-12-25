@@ -46,6 +46,7 @@ import adminRoutes from "./routes/adminRoutes";
 import helpRoutes from "./routes/helpRoutes";
 import userSettingsRoutes from "./routes/userSettingsRoutes";
 import mediaRoutes from "./routes/mediaRoutes";
+import musicClipsRoutes from "./routes/musicClipsRoutes";
 import { processAutoSendTick } from "./services/autoSendScheduler";
 import { getFirestoreInfo, isFirestoreAvailable } from "./services/firebaseAdmin";
 
@@ -241,6 +242,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/help", helpRoutes);
 app.use("/api/user-settings", userSettingsRoutes);
 app.use("/api/media", mediaRoutes);
+app.use("/api/music-clips", musicClipsRoutes);
 
 // Обработчик 404 - логируем все запросы, которые не нашли роут
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -388,6 +390,23 @@ if (process.env.ENABLE_CRON_SCHEDULER !== "false") {
     Logger.info("Cron scheduler enabled: Blottata monitoring will run every minute");
   }).catch((error) => {
     Logger.error("Failed to load Blottata monitoring service", error);
+  });
+}
+
+// Music Clips планировщик - отдельный от shorts
+if (process.env.ENABLE_CRON_SCHEDULER !== "false") {
+  import("./services/musicClipsScheduler").then(({ processMusicClipsTick }) => {
+    cron.schedule("* * * * *", async () => {
+      Logger.info("[MusicClips] Cron scheduler: running music clips tick");
+      try {
+        await processMusicClipsTick();
+      } catch (error) {
+        Logger.error("[MusicClips] Cron scheduler: error in music clips tick", error);
+      }
+    });
+    Logger.info("[MusicClips] Cron scheduler enabled: music clips will run every minute");
+  }).catch((error) => {
+    Logger.error("[MusicClips] Failed to load music clips scheduler service", error);
   });
 }
 

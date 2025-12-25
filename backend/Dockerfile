@@ -16,6 +16,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+# Устанавливаем ffmpeg и ffprobe
+RUN apk add --no-cache ffmpeg
+
 COPY --from=builder /app/package*.json ./
 RUN npm install --omit=dev
 

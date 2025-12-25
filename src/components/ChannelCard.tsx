@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Calendar, Clock, Languages, Users, Sparkles, GripVertical, FileText, ChevronDown, MoreVertical, Zap } from "lucide-react";
+import { Calendar, Clock, Languages, Users, Sparkles, GripVertical, FileText, ChevronDown, MoreVertical, Zap, Music, Loader2 } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { Channel } from "../domain/channel";
@@ -22,6 +22,8 @@ interface ChannelCardProps {
   onGenerate: () => void;
   onAutoGenerate?: () => void;
   onCustomPrompt?: () => void;
+  onMusicClipsRunOnce?: () => void;
+  isRunningMusicClips?: boolean;
 }
 
 const platformLabels: Record<Channel["platform"], string> = {
@@ -48,7 +50,9 @@ const ChannelCard = ({
   onDelete,
   onGenerate,
   onAutoGenerate,
-  onCustomPrompt
+  onCustomPrompt,
+  onMusicClipsRunOnce,
+  isRunningMusicClips = false
 }: ChannelCardProps) => {
   const [isMobile, setIsMobile] = useState(false);
 
@@ -223,6 +227,12 @@ const ChannelCard = ({
             <div className="truncate text-sm font-semibold text-white drop-shadow-sm">
               {number}. {channel.name}
             </div>
+            {/* Индикатор типа канала для отладки */}
+            {channel.type && (
+              <div className="text-[9px] text-slate-400">
+                {channel.type === "music_clips" ? "🎵 Music Clips" : "📹 Shorts"}
+              </div>
+            )}
             {/* Бейдж Blotato */}
             {isBlottataEnabled && (
               <div 

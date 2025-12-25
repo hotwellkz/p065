@@ -1223,18 +1223,32 @@ router.post("/fetchAndSaveToServer", authRequired, async (req, res) => {
           videoTitle: videoTitle || "not provided"
         });
 
-        // Генерируем уникальное имя файла на основе title
+        // Генерируем уникальное имя файла
+        // ВАЖНО: Для автоматизации используем строго video_<shortId>.mp4
+        // fetchAndSaveToServer используется в автоматическом режиме, поэтому используем единый формат
         const inboxDir = storage.resolveInboxDir(userFolderKey, channelFolderKey);
         const videoId = generateVideoId(); // Для метаданных и БД
-        const fileBaseName = await generateUniqueVideoFileName(videoTitle, inboxDir, videoId);
-        const safeBaseName = makeSafeBaseName(videoTitle);
+        
+        // Используем единый формат для автоматизации
+        const { generateVideoFilename } = await import("../utils/videoFilename");
+        const fullFileName = await generateVideoFilename({
+          source: "telegramRoutes_fetchAndSaveToServer",
+          channelId: channelId!,
+          userId,
+          targetDir: inboxDir
+        });
+        // Убираем расширение .mp4, так как resolveInboxPath добавит его
+        const fileBaseName = fullFileName.replace(/\.mp4$/i, '');
+        const safeBaseName = makeSafeBaseName(videoTitle || "video");
 
-        Logger.info("fetchAndSaveToServer: generated file name", {
+        Logger.info("fetchAndSaveToServer: generated file name (automation format)", {
           videoTitle: videoTitle || "not provided",
           safeBaseName,
           fileBaseName,
+          fullFileName,
           videoId,
-          inboxDir
+          inboxDir,
+          rule: "automation_requires_video_shortid_format"
         });
 
         // Получаем пути для inbox

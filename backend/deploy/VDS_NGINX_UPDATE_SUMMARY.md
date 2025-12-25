@@ -123,3 +123,4 @@ curl -r 0-1023 https://api.shortsai.ru/api/media/<file>.mp4 | hexdump -C | grep 
 - `backend/deploy/UPDATE_VDS_NGINX.md` - подробная инструкция
 
 
+

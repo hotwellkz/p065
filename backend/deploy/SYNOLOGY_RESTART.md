@@ -88,3 +88,4 @@ curl.exe -r 0-1023 -I https://api.shortsai.ru/api/media/hotwell-kz-at-gmail-com_
 Используйте DSM UI для перезапуска контейнера, или настройте passwordless sudo для docker команд (как было сделано ранее).
 
 
+

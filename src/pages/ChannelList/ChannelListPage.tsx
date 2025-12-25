@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Plus, Video, Wand2, Calendar, MoreVertical, Bell, Grid3x3, List, User, LogOut, Search, X, AlignJustify, Play, Edit2, Download, Upload } from "lucide-react";
+import { Loader2, Plus, Video, Wand2, Calendar, MoreVertical, Bell, Grid3x3, List, User, LogOut, Search, X, AlignJustify, Play, Edit2, Download, Upload, Music } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import {
   DndContext,
@@ -27,11 +27,12 @@ import UserMenu from "../../components/UserMenu";
 import NotificationBell from "../../components/NotificationBell";
 import { useAuthStore } from "../../stores/authStore";
 import { useChannelStore } from "../../stores/channelStore";
-import type { Channel } from "../../domain/channel";
+import type { Channel, ChannelType } from "../../domain/channel";
 import { calculateChannelStates, type ChannelStateInfo } from "../../utils/channelAutomationState";
 import { fetchScheduleSettings } from "../../api/scheduleSettings";
 import { getAuthToken } from "../../utils/auth";
 import { getUserSettings, updateUserSettings } from "../../api/userSettings";
+import { runMusicClipsOnce } from "../../api/musicClips";
 
 const backendBaseUrl =
   (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
@@ -74,6 +75,33 @@ const ChannelListPage = () => {
   const [menuPosition, setMenuPosition] = useState<{ top: number; right: number } | null>(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [runningMusicClips, setRunningMusicClips] = useState<Set<string>>(new Set());
+  
+  // Состояние для фильтра по типу канала
+  const [channelTypeFilter, setChannelTypeFilter] = useState<ChannelType | "all">(() => {
+    // Если мы на странице /music-clips, показываем только music_clips
+    if (location.pathname === "/music-clips") {
+      return "music_clips";
+    }
+    // По умолчанию показываем все, но можно сохранять в localStorage
+    const saved = localStorage.getItem("channels-type-filter");
+    return (saved === "shorts" || saved === "music_clips" || saved === "all") ? saved : "all";
+  });
+
+  // Обновляем фильтр при изменении пути
+  useEffect(() => {
+    if (location.pathname === "/music-clips") {
+      setChannelTypeFilter("music_clips");
+    } else if (location.pathname === "/channels") {
+      // При переходе на /channels сохраняем текущий фильтр или ставим "all"
+      const saved = localStorage.getItem("channels-type-filter");
+      if (saved === "shorts" || saved === "music_clips" || saved === "all") {
+        setChannelTypeFilter(saved);
+      } else {
+        setChannelTypeFilter("all");
+      }
+    }
+  }, [location.pathname]);
   
   // Состояние для режима отображения (grid/list/compact)
   type ChannelsViewMode = "grid" | "list" | "compact";
@@ -87,13 +115,34 @@ const ChannelListPage = () => {
     localStorage.setItem("channels-layout-mode", layoutMode);
   }, [layoutMode]);
 
+  // Сохраняем фильтр типа в localStorage при изменении
+  useEffect(() => {
+    if (channelTypeFilter !== "all") {
+      localStorage.setItem("channels-type-filter", channelTypeFilter);
+    }
+  }, [channelTypeFilter]);
+
   // Синхронизируем локальное состояние с глобальным
   useEffect(() => {
     setLocalChannels(channels);
-  }, [channels]);
+    // Отладочный лог для проверки типов каналов
+    if (channels.length > 0) {
+      const types = channels.map(c => c.type || "shorts");
+      console.log("[ChannelListPage] Channel types:", types);
+      console.log("[ChannelListPage] Current filter:", channelTypeFilter);
+      console.log("[ChannelListPage] Location pathname:", location.pathname);
+    }
+  }, [channels, channelTypeFilter, location.pathname]);
 
-  // Функция для фильтрации каналов по поисковому запросу
+  // Функция для фильтрации каналов по типу и поисковому запросу
   const filteredChannels = localChannels.filter((channel) => {
+    // Фильтр по типу канала
+    const channelType: ChannelType = channel.type || "shorts";
+    if (channelTypeFilter !== "all" && channelType !== channelTypeFilter) {
+      return false;
+    }
+    
+    // Фильтр по поисковому запросу
     if (!searchQuery.trim()) {
       return true;
     }
@@ -349,6 +398,46 @@ const ChannelListPage = () => {
     console.log("Custom prompt sent successfully");
   };
 
+  const handleMusicClipsRunOnce = async (channel: Channel) => {
+    if (!user?.uid) {
+      setToast({
+        message: "Ошибка авторизации. Перезайдите в систему.",
+        type: "error"
+      });
+      return;
+    }
+
+    setRunningMusicClips(prev => new Set(prev).add(channel.id));
+
+    try {
+      const result = await runMusicClipsOnce(channel.id, user.uid);
+      
+      if (result.success) {
+        setToast({
+          message: `Music Clips запущен успешно! Платформы: ${result.publishedPlatforms?.join(", ") || "не указаны"}`,
+          type: "success"
+        });
+      } else {
+        setToast({
+          message: result.error || "Ошибка при запуске Music Clips",
+          type: "error"
+        });
+      }
+    } catch (error: any) {
+      console.error("Error running music clips:", error);
+      setToast({
+        message: error?.message || "Ошибка при запуске Music Clips",
+        type: "error"
+      });
+    } finally {
+      setRunningMusicClips(prev => {
+        const next = new Set(prev);
+        next.delete(channel.id);
+        return next;
+      });
+    }
+  };
+
   const handleMobileLogout = async () => {
     setIsLoggingOut(true);
     try {
@@ -524,6 +613,18 @@ const ChannelListPage = () => {
                 </button>
                 <button
                   type="button"
+                  onClick={() => {
+                    navigate("/music-clips");
+                    setChannelTypeFilter("music_clips");
+                  }}
+                  className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm"
+                  title="Music Clips"
+                >
+                  <Music size={14} className="lg:w-4 lg:h-4" />
+                  <span className="hidden xl:inline">Music Clips</span>
+                </button>
+                <button
+                  type="button"
                   onClick={() => navigate("/channels/schedule")}
                   className="premium-btn-secondary inline-flex items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-xs text-slate-200 lg:px-3 lg:py-2 lg:text-sm"
                   title="Расписание"
@@ -608,9 +709,67 @@ const ChannelListPage = () => {
             </div>
           </div>
 
-          {/* Вторая строка: поиск */}
-          {channels.length > 0 && (
-            <div className="pt-2 border-t border-white/5">
+          {/* Вторая строка: переключатель типа канала и поиск */}
+          <div className="pt-2 border-t border-white/5 space-y-3">
+            {/* Переключатель типа канала - всегда виден */}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] lg:text-xs text-slate-500 font-medium">Тип каналов:</span>
+                <div className="flex items-center gap-1 rounded-lg premium-btn-secondary p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChannelTypeFilter("all");
+                      if (location.pathname === "/music-clips") {
+                        navigate("/channels");
+                      }
+                    }}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] lg:text-xs transition-all ${
+                      channelTypeFilter === "all"
+                        ? "bg-brand text-white shadow-lg"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    <Video size={12} className="lg:w-3.5 lg:h-3.5" />
+                    <span>Все</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChannelTypeFilter("shorts");
+                      if (location.pathname === "/music-clips") {
+                        navigate("/channels");
+                      }
+                    }}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] lg:text-xs transition-all ${
+                      channelTypeFilter === "shorts"
+                        ? "bg-brand text-white shadow-lg"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    <Video size={12} className="lg:w-3.5 lg:h-3.5" />
+                    <span>Shorts</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChannelTypeFilter("music_clips");
+                      if (location.pathname !== "/music-clips") {
+                        navigate("/music-clips");
+                      }
+                    }}
+                    className={`flex items-center justify-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[10px] lg:text-xs transition-all ${
+                      channelTypeFilter === "music_clips"
+                        ? "bg-brand text-white shadow-lg"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    <Music size={12} className="lg:w-3.5 lg:h-3.5" />
+                    <span>Music Clips</span>
+                  </button>
+                </div>
+              </div>
+              
+              {/* Поиск */}
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 lg:left-3 lg:h-4 lg:w-4" />
                 <input
@@ -631,13 +790,13 @@ const ChannelListPage = () => {
                   </button>
                 )}
               </div>
-              {searchQuery && (
-                <p className="mt-1.5 text-[10px] lg:text-xs text-slate-500">
-                  Найдено каналов: {filteredChannels.length} из {channels.length}
-                </p>
-              )}
-            </div>
-          )}
+            {(searchQuery || channelTypeFilter !== "all") && channels.length > 0 && (
+              <p className="text-[10px] lg:text-xs text-slate-500">
+                Найдено каналов: {filteredChannels.length} из {channels.length}
+                {channelTypeFilter !== "all" && ` (${channelTypeFilter === "shorts" ? "Shorts" : "Music Clips"})`}
+              </p>
+            )}
+          </div>
         </header>
 
         {/* Мобильная версия заголовка */}
@@ -724,6 +883,32 @@ const ChannelListPage = () => {
                       >
                         <Bell size={16} />
                         Уведомления
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate("/channels");
+                          setChannelTypeFilter("shorts");
+                          setShowMobileMenu(false);
+                          setMenuPosition(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                      >
+                        <Video size={16} />
+                        Shorts
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate("/music-clips");
+                          setChannelTypeFilter("music_clips");
+                          setShowMobileMenu(false);
+                          setMenuPosition(null);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800/50"
+                      >
+                        <Music size={16} />
+                        Music Clips
                       </button>
                       <button
                         type="button"
@@ -1005,6 +1190,8 @@ const ChannelListPage = () => {
                         onGenerate={() => goToGeneration(channel.id)}
                         onAutoGenerate={() => handleAutoGenerate(channel)}
                         onCustomPrompt={() => handleCustomPrompt(channel)}
+                        onMusicClipsRunOnce={channel.type === "music_clips" ? () => handleMusicClipsRunOnce(channel) : undefined}
+                        isRunningMusicClips={runningMusicClips.has(channel.id)}
                       />
                     );
                   })}
@@ -1036,6 +1223,8 @@ const ChannelListPage = () => {
                           onGenerate={() => goToGeneration(channel.id)}
                           onAutoGenerate={() => handleAutoGenerate(channel)}
                           onCustomPrompt={() => handleCustomPrompt(channel)}
+                          onMusicClipsRunOnce={channel.type === "music_clips" ? () => handleMusicClipsRunOnce(channel) : undefined}
+                          isRunningMusicClips={runningMusicClips.has(channel.id)}
                         />
                       </div>
                     );

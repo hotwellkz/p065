@@ -160,3 +160,4 @@ sudo docker compose logs -f backend | grep -i "media\|blotato\|validation"
 - Blotato может читать метаданные
 
 
+

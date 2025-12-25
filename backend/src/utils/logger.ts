@@ -33,6 +33,10 @@ export class Logger {
     }
     console.error(message, ...meta);
   }
+
+  static debug(message: string, ...meta: unknown[]) {
+    console.log(message, ...meta);
+  }
 }
 
 

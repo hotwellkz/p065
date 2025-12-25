@@ -83,3 +83,4 @@ ssh adminv@192.168.100.222 "cd /volume1/docker/shortsai/backend && sudo /usr/loc
 ```
 
 
+

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import type { FormEvent } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Loader2, Save, X, Plus, Trash2, Play, Download } from "lucide-react";
+import { ArrowLeft, Loader2, Save, X, Plus, Trash2, Play, Download, Music, Video } from "lucide-react";
 import { useAuthStore } from "../../stores/authStore";
 import { useChannelStore } from "../../stores/channelStore";
 import type {
@@ -9,7 +9,9 @@ import type {
   SupportedPlatform,
   SupportedLanguage,
   ChannelAutoSendSchedule,
-  ChannelPreferences
+  ChannelPreferences,
+  ChannelType,
+  MusicClipsSettings
 } from "../../domain/channel";
 import PreferencesVariantsEditor from "../../components/PreferencesVariantsEditor";
 import { validatePreferences } from "../../utils/preferencesUtils";
@@ -697,6 +699,70 @@ const ChannelEditPage = () => {
                       Сохранить
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+
+            {/* Переключатель типа канала */}
+            <div className="space-y-2 mb-6">
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-200">
+                <span>Тип канала *</span>
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newType: ChannelType = "shorts";
+                    setChannel({
+                      ...channel,
+                      type: newType,
+                      // Очищаем musicClipsSettings при переключении на shorts
+                      musicClipsSettings: newType === "music_clips" ? channel.musicClipsSettings : undefined
+                    });
+                  }}
+                  className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-3 transition-all duration-200 ${
+                    (channel.type || "shorts") === "shorts"
+                      ? "border-brand bg-brand/10 text-white shadow-md shadow-brand/20"
+                      : "border-white/10 bg-slate-950/60 text-slate-300 hover:border-brand/40 hover:bg-slate-900/80"
+                  }`}
+                >
+                  <Video size={16} />
+                  <span>Shorts</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newType: ChannelType = "music_clips";
+                    setChannel({
+                      ...channel,
+                      type: newType,
+                      // Инициализируем musicClipsSettings при переключении на music_clips
+                      musicClipsSettings: channel.musicClipsSettings || {
+                        targetDurationSec: 60,
+                        clipSec: 10,
+                        segmentDelayMs: 30000,
+                        maxParallelSegments: 1,
+                        maxRetries: 3,
+                        retryDelayMs: 60000,
+                        sunoPrompt: "",
+                        styleTags: [],
+                        platforms: {
+                          youtube: true,
+                          tiktok: false,
+                          instagram: false
+                        },
+                        language: channel.language || "ru"
+                      }
+                    });
+                  }}
+                  className={`flex items-center justify-center gap-2 rounded-xl border px-4 py-3 transition-all duration-200 ${
+                    channel.type === "music_clips"
+                      ? "border-brand bg-brand/10 text-white shadow-md shadow-brand/20"
+                      : "border-white/10 bg-slate-950/60 text-slate-300 hover:border-brand/40 hover:bg-slate-900/80"
+                  }`}
+                >
+                  <Music size={16} />
+                  <span>Music Clips</span>
                 </button>
               </div>
             </div>

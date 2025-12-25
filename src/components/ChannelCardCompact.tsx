@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Play, Edit2, MoreVertical, Zap, GripVertical } from "lucide-react";
+import { Play, Edit2, MoreVertical, Zap, GripVertical, Music, Loader2 } from "lucide-react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { Channel } from "../domain/channel";
@@ -32,6 +32,8 @@ interface ChannelCardCompactProps {
   onGenerate: () => void;
   onAutoGenerate?: () => void;
   onCustomPrompt?: () => void;
+  onMusicClipsRunOnce?: () => void;
+  isRunningMusicClips?: boolean;
 }
 
 const ChannelCardCompact = ({
@@ -43,7 +45,9 @@ const ChannelCardCompact = ({
   onDelete,
   onGenerate,
   onAutoGenerate,
-  onCustomPrompt
+  onCustomPrompt,
+  onMusicClipsRunOnce,
+  isRunningMusicClips = false
 }: ChannelCardCompactProps) => {
   const [showMenu, setShowMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
@@ -260,17 +264,36 @@ const ChannelCardCompact = ({
 
           {/* Действия */}
           <div className="flex-shrink-0 flex items-center gap-1">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onGenerate();
-              }}
-              className="flex items-center justify-center w-7 h-7 rounded-lg bg-brand/20 hover:bg-brand/30 text-brand-light transition-colors"
-              title="Генерация"
-            >
-              <Play size={14} />
-            </button>
+            {channel.type === "music_clips" && onMusicClipsRunOnce ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMusicClipsRunOnce();
+                }}
+                disabled={isRunningMusicClips}
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Запустить Music Clips"
+              >
+                {isRunningMusicClips ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Music size={14} />
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onGenerate();
+                }}
+                className="flex items-center justify-center w-7 h-7 rounded-lg bg-brand/20 hover:bg-brand/30 text-brand-light transition-colors"
+                title="Генерация"
+              >
+                <Play size={14} />
+              </button>
+            )}
             <button
               type="button"
               onClick={(e) => {
@@ -307,6 +330,11 @@ const ChannelCardCompact = ({
                 </div>
                 <div className="text-xs text-slate-400 mt-0.5">
                   {platformLabels[channel.platform]} · {languageLabels[channel.language]}
+                  {channel.type && (
+                    <span className="ml-1 text-[10px]">
+                      {channel.type === "music_clips" ? "🎵" : "📹"}
+                    </span>
+                  )}
                 </div>
                 {/* Компактный индикатор автоматизации для мобильной версии */}
                 {hasAutomation && automationStateInfo && (
@@ -342,17 +370,36 @@ const ChannelCardCompact = ({
               className="flex-shrink-0"
             />
             <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onGenerate();
-                }}
-                className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand/20 hover:bg-brand/30 text-brand-light transition-colors"
-                title="Генерация"
-              >
-                <Play size={14} />
-              </button>
+              {channel.type === "music_clips" && onMusicClipsRunOnce ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMusicClipsRunOnce();
+                  }}
+                  disabled={isRunningMusicClips}
+                  className="flex items-center justify-center w-8 h-8 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Запустить Music Clips"
+                >
+                  {isRunningMusicClips ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Music size={14} />
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onGenerate();
+                  }}
+                  className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand/20 hover:bg-brand/30 text-brand-light transition-colors"
+                  title="Генерация"
+                >
+                  <Play size={14} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={(e) => {

@@ -88,3 +88,4 @@ find /volume1/docker/shortsai/backend/storage/videos/users -name "*.mp4" -type f
 - [ ] Диагностический endpoint `/api/diag/storage` показывает правильные пути
 
 
+

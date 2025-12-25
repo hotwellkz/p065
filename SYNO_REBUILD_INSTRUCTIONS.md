@@ -70,3 +70,4 @@ sudo /usr/local/bin/docker compose exec backend cat /app/src/utils/telegramDownl
 3. Это покажет, есть ли URL в Telegram update или нет
 
 
+

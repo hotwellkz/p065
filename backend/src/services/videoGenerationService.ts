@@ -6,7 +6,7 @@ import { getAutoDownloadDelayMinutesForChannel } from "./autoSendScheduler";
 import type { Channel } from "../types/channel";
 import { generateVideoTitleFromPrompt, type TitleSource } from "./titleGenerator";
 
-export type VideoGenerationSource = "schedule" | "custom_prompt";
+export type VideoGenerationSource = "schedule" | "custom_prompt" | "music_clips_pipeline";
 
 export interface VideoGenerationOptions {
   channelId: string;

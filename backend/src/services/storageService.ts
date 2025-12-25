@@ -38,6 +38,7 @@ export interface VideoMeta {
 export class StorageService {
   private readonly root: string;
   private readonly videosRoot: string;
+  private readonly musicClipsRoot: string;
 
   constructor() {
     // Корень хранилища внутри контейнера
@@ -57,18 +58,30 @@ export class StorageService {
       this.videosRoot = path.join(this.root, 'videos');
     }
 
+    // Music Clips root - отдельный от videos
+    const musicClipsRootEnv = process.env.MUSIC_CLIPS_ROOT;
+    if (musicClipsRootEnv) {
+      this.musicClipsRoot = path.resolve(musicClipsRootEnv);
+    } else {
+      this.musicClipsRoot = path.join(this.root, 'music_clips');
+    }
+
     // Логируем при создании
     Logger.info('[STORAGE] StorageService initialized', {
       root: this.root,
       videosRoot: this.videosRoot,
+      musicClipsRoot: this.musicClipsRoot,
       resolvedRoot: path.resolve(this.root),
-      resolvedVideosRoot: path.resolve(this.videosRoot)
+      resolvedVideosRoot: path.resolve(this.videosRoot),
+      resolvedMusicClipsRoot: path.resolve(this.musicClipsRoot)
     });
 
     console.log('[STORAGE] root=', this.root);
     console.log('[STORAGE] videosRoot=', this.videosRoot);
+    console.log('[STORAGE] musicClipsRoot=', this.musicClipsRoot);
     console.log('[STORAGE] resolvedRoot=', path.resolve(this.root));
     console.log('[STORAGE] resolvedVideosRoot=', path.resolve(this.videosRoot));
+    console.log('[STORAGE] resolvedMusicClipsRoot=', path.resolve(this.musicClipsRoot));
   }
 
   /**
@@ -83,6 +96,13 @@ export class StorageService {
    */
   getVideosRoot(): string {
     return this.videosRoot;
+  }
+
+  /**
+   * Получить путь к папке music_clips
+   */
+  getMusicClipsRoot(): string {
+    return this.musicClipsRoot;
   }
 
   /**
@@ -676,6 +696,123 @@ export class StorageService {
       // В случае ошибки возвращаем путь в старом формате как fallback
       return { path: path.join(this.videosRoot, 'users', userId, 'channels', channelId), isOldFormat: true };
     }
+  }
+
+  // ========== Music Clips Storage Methods ==========
+
+  /**
+   * Получить путь к папке пользователя для music_clips
+   * @param userFolderKey - Ключ папки пользователя (emailSlug__userId)
+   */
+  resolveMusicClipsUserDir(userFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey);
+  }
+
+  /**
+   * Получить путь к папке канала для music_clips
+   * @param userFolderKey - Ключ папки пользователя (emailSlug__userId)
+   * @param channelFolderKey - Ключ папки канала (channelSlug__channelId)
+   */
+  resolveMusicClipsChannelDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey);
+  }
+
+  /**
+   * Получить путь к inbox/track для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsTrackDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'inbox', 'track');
+  }
+
+  /**
+   * Получить путь к inbox/segments для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsSegmentsDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'inbox', 'segments');
+  }
+
+  /**
+   * Получить путь к inbox/render для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsRenderDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'inbox', 'render');
+  }
+
+  /**
+   * Получить путь к inbox/final для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsFinalDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'inbox', 'final');
+  }
+
+  /**
+   * Получить путь к uploaded для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsUploadedDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'uploaded');
+  }
+
+  /**
+   * Получить путь к failed для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsFailedDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'failed');
+  }
+
+  /**
+   * Получить путь к logs для music_clips
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  resolveMusicClipsLogsDir(userFolderKey: string, channelFolderKey: string): string {
+    return path.join(this.musicClipsRoot, 'users', userFolderKey, 'channels', channelFolderKey, 'logs');
+  }
+
+  /**
+   * Гарантировать существование всех директорий для music_clips канала
+   * @param userFolderKey - Ключ папки пользователя
+   * @param channelFolderKey - Ключ папки канала
+   */
+  async ensureMusicClipsDirs(userFolderKey: string, channelFolderKey: string): Promise<void> {
+    const userDir = this.resolveMusicClipsUserDir(userFolderKey);
+    const channelDir = this.resolveMusicClipsChannelDir(userFolderKey, channelFolderKey);
+    const trackDir = this.resolveMusicClipsTrackDir(userFolderKey, channelFolderKey);
+    const segmentsDir = this.resolveMusicClipsSegmentsDir(userFolderKey, channelFolderKey);
+    const renderDir = this.resolveMusicClipsRenderDir(userFolderKey, channelFolderKey);
+    const finalDir = this.resolveMusicClipsFinalDir(userFolderKey, channelFolderKey);
+    const uploadedDir = this.resolveMusicClipsUploadedDir(userFolderKey, channelFolderKey);
+    const failedDir = this.resolveMusicClipsFailedDir(userFolderKey, channelFolderKey);
+    const logsDir = this.resolveMusicClipsLogsDir(userFolderKey, channelFolderKey);
+
+    await this.ensureDirs(
+      userDir,
+      channelDir,
+      trackDir,
+      segmentsDir,
+      renderDir,
+      finalDir,
+      uploadedDir,
+      failedDir,
+      logsDir
+    );
+
+    Logger.info('[STORAGE] Music Clips directories ensured', {
+      userFolderKey,
+      channelFolderKey,
+      channelDir: path.resolve(channelDir)
+    });
   }
 }
 

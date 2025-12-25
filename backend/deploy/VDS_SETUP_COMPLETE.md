@@ -149,3 +149,4 @@ sudo docker compose logs -f backend | grep -i "media\|blotato\|validation"
 5. Проверить логи на наличие ошибок
 
 
+

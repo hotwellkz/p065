@@ -99,6 +99,14 @@ const AppRouter = () => {
       }
     />
     <Route
+      path="/music-clips"
+      element={
+        <PrivateRoute>
+          <ChannelListPage />
+        </PrivateRoute>
+      }
+    />
+    <Route
       path="/channels/new"
       element={
         <PrivateRoute>

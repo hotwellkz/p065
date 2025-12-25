@@ -6,6 +6,9 @@
  * - НЕ добавлять дату/время/ID в имя файла
  * - Цифры только для коллизий: _2, _3, _4 и т.д.
  * - Имена должны быть "человеческими", пригодными для YouTube titles
+ * 
+ * ВАЖНО: Для автоматизации (inbox-monitor → autopublish) используется
+ * строго формат video_<shortId>.mp4 через generateVideoFilename()
  */
 
 import { Logger } from "./logger";
@@ -29,20 +32,28 @@ export interface BuildVideoBaseNameResult {
   reason?: string;
 }
 
-// Blacklist слишком общих имён
-const GENERIC_NAMES_BLACKLIST = [
-  "postroimdom",
-  "postroimdomkz",
-  "hotwell",
-  "sipdelux",
+// A) STOP/GENERIC слова - действительно мусор, не несущие смысла
+const GENERIC_STOP_WORDS = [
   "video",
   "shorts",
   "clip",
   "rolik",
   "film",
-  "movie",
-  "kz"
+  "movie"
 ];
+
+// B) BRAND слова - бренды/компании, НЕ считаются "слишком общими"
+// Если название содержит бренд + смысловые слова - это хорошо
+const BRAND_WORDS = [
+  "postroimdom",
+  "postroimdomkz",
+  "hotwell",
+  "sipdelux",
+  "kz"  // Географический идентификатор, часто используется с брендами
+];
+
+// Объединённый набор для быстрой проверки
+const ALL_GENERIC_AND_BRAND = new Set([...GENERIC_STOP_WORDS, ...BRAND_WORDS]);
 
 // Стоп-слова для удаления при сжатии
 const STOP_WORDS_RU = [
@@ -72,11 +83,75 @@ const WORD_ALIASES: Record<string, string> = {
 };
 
 /**
- * Проверяет, является ли имя слишком общим (попало в blacklist)
+ * Токенизирует имя файла на отдельные слова
+ * Разбивает по подчёркиваниям, дефисам и пробелам
+ */
+function tokenizeName(name: string): string[] {
+  if (!name || typeof name !== "string") {
+    return [];
+  }
+  
+  // Нормализуем: заменяем все разделители на пробелы, затем разбиваем
+  const normalized = name.toLowerCase().replace(/[-_]+/g, " ");
+  const tokens = normalized.split(/\s+/).filter(token => token.length > 0);
+  
+  // Очищаем токены от не-буквенно-цифровых символов (кроме начала/конца)
+  return tokens.map(token => token.replace(/[^a-z0-9]/g, "")).filter(token => token.length > 0);
+}
+
+/**
+ * Проверяет, является ли имя слишком общим
+ * 
+ * Правила:
+ * - Проверяет только по STOP/GENERIC словам (не по брендам)
+ * - Использует токенизацию для точного сравнения (не includes по подстроке)
+ * - Если ВСЕ токены входят в GENERIC_STOP_WORDS и токенов мало (<=2) => generic
+ * - Если есть хотя бы один бренд-токен => НЕ generic
+ * - Если есть хотя бы один токен не из blacklist => НЕ generic
  */
 export function isTooGenericName(name: string): boolean {
-  const lower = name.toLowerCase().replace(/[^a-z0-9]/g, "");
-  return GENERIC_NAMES_BLACKLIST.some(generic => lower.includes(generic) || generic.includes(lower));
+  if (!name || typeof name !== "string" || name.trim().length === 0) {
+    return true; // Пустое имя считается generic
+  }
+  
+  const tokens = tokenizeName(name);
+  
+  if (tokens.length === 0) {
+    return true; // Нет токенов = generic
+  }
+  
+  // Если только 1 токен и он в GENERIC_STOP_WORDS => generic
+  if (tokens.length === 1) {
+    return GENERIC_STOP_WORDS.includes(tokens[0]);
+  }
+  
+  // Если 2 токена и оба в GENERIC_STOP_WORDS => generic
+  if (tokens.length === 2) {
+    return GENERIC_STOP_WORDS.includes(tokens[0]) && GENERIC_STOP_WORDS.includes(tokens[1]);
+  }
+  
+  // Если есть хотя бы один бренд-токен => НЕ generic
+  const hasBrandToken = tokens.some(token => BRAND_WORDS.includes(token));
+  if (hasBrandToken) {
+    return false;
+  }
+  
+  // Если все токены в GENERIC_STOP_WORDS => generic
+  const allGeneric = tokens.every(token => GENERIC_STOP_WORDS.includes(token));
+  if (allGeneric) {
+    return true;
+  }
+  
+  // Если есть хотя бы один токен не из blacklist => НЕ generic
+  const hasNonGenericToken = tokens.some(token => 
+    !GENERIC_STOP_WORDS.includes(token) && !BRAND_WORDS.includes(token)
+  );
+  if (hasNonGenericToken) {
+    return false;
+  }
+  
+  // По умолчанию считаем не generic (если есть смешанные токены)
+  return false;
 }
 
 /**
@@ -214,6 +289,9 @@ function smartCompressTitle(title: string, maxLen: number): string {
 
 /**
  * Защита от слишком общего имени: добавляет ключевые слова из контекста
+ * 
+ * ВАЖНО: Теперь бренды НЕ считаются generic, поэтому эта функция
+ * срабатывает только для действительно generic слов (video, shorts и т.д.)
  */
 export function ensureNonGeneric(
   name: string,
@@ -223,14 +301,32 @@ export function ensureNonGeneric(
     return name;
   }
 
-  // Если имя слишком общее, пытаемся добавить ключевые слова из promptText
+  const tokens = tokenizeName(name);
+  const brandTokens = tokens.filter(t => BRAND_WORDS.includes(t));
+  
+  // Если есть бренд-токены, но всё равно generic - это странно, но не добавляем ничего
+  if (brandTokens.length > 0) {
+    Logger.warn("[ensureNonGeneric] Name has brand tokens but marked generic, returning as-is", {
+      name,
+      tokens,
+      brandTokens
+    });
+    return name;
+  }
+
+  // Если имя слишком общее (только generic слова), пытаемся добавить ключевые слова из promptText
   if (context.promptText && context.promptText.trim().length > 10) {
     const keywords = extractKeywordsFromPrompt(context.promptText);
     if (keywords.length > 0) {
       const additional = keywords.slice(0, 2).join("_");
       const enhanced = `${name}_${additional}`;
       const sanitized = sanitizeBaseName(enhanced, 50, 16);
-      if (sanitized.length >= 16) {
+      if (sanitized.length >= 16 && !isTooGenericName(sanitized)) {
+        Logger.info("[ensureNonGeneric] Enhanced generic name with keywords", {
+          original: name,
+          enhanced: sanitized,
+          keywords: keywords.slice(0, 2)
+        });
         return sanitized;
       }
     }
@@ -350,10 +446,21 @@ function fallbackNameFromPrompt(
   // Если всё равно слишком коротко или пусто, используем последний fallback
   if (name.length < minLen) {
     const firstKeyword = keywords[0] ? sanitizeBaseName(keywords[0], 15, 3) : "video";
-    if (isTooGenericName(firstKeyword)) {
+    const tokens = tokenizeName(firstKeyword);
+    const brandTokens = tokens.filter(t => BRAND_WORDS.includes(t));
+    const isGeneric = isTooGenericName(firstKeyword);
+    
+    // Если есть бренд-токены, используем как есть
+    if (brandTokens.length > 0) {
+      return firstKeyword.substring(0, maxLen);
+    }
+    
+    // Если действительно generic (только generic слова), добавляем случайное слово
+    if (isGeneric) {
       const randomWord = Math.random().toString(36).substring(2, 6);
       return `${firstKeyword}_${randomWord}`.substring(0, maxLen);
     }
+    
     return firstKeyword.substring(0, maxLen);
   }
 
@@ -494,24 +601,40 @@ export async function buildVideoBaseName(
   // ПРИОРИТЕТ 1: uiTitle (если есть и не пустое)
   if (uiTitle && typeof uiTitle === "string" && uiTitle.trim().length > 0) {
     const sanitized = sanitizeBaseName(uiTitle, maxLen, minLen);
+    const isGeneric = isTooGenericName(sanitized);
+    const tokens = tokenizeName(sanitized);
+    const genericTokens = tokens.filter(t => GENERIC_STOP_WORDS.includes(t));
+    const brandTokens = tokens.filter(t => BRAND_WORDS.includes(t));
     
-    if (sanitized.length >= minLen && !isTooGenericName(sanitized)) {
-      Logger.info("[VIDEO_FILENAME] using uiTitle", {
-        uiTitle,
-        sanitized,
-        length: sanitized.length
+    if (sanitized.length >= minLen && !isGeneric) {
+      Logger.info("[BASENAME] source=uiTitle", {
+        rawTitle: uiTitle,
+        baseName: sanitized,
+        length: sanitized.length,
+        tokens,
+        brandTokens: brandTokens.length > 0 ? brandTokens : undefined,
+        reason: "valid_uiTitle"
       });
       return {
         baseName: sanitized,
         source: "uiTitle",
-        rawTitle: uiTitle
+        rawTitle: uiTitle,
+        reason: "valid_uiTitle"
       };
     } else {
-      Logger.warn("[VIDEO_FILENAME] uiTitle too short or generic, falling back", {
-        uiTitle,
-        sanitized,
+      const reason = sanitized.length < minLen 
+        ? `too_short_${sanitized.length}_chars` 
+        : `generic_tokens_${genericTokens.join("_")}`;
+      
+      Logger.warn("[BASENAME] source=uiTitle rejected, falling back", {
+        rawTitle: uiTitle,
+        baseName: sanitized,
         length: sanitized.length,
-        isGeneric: isTooGenericName(sanitized)
+        tokens,
+        genericTokens: genericTokens.length > 0 ? genericTokens : undefined,
+        brandTokens: brandTokens.length > 0 ? brandTokens : undefined,
+        isGeneric,
+        reason
       });
     }
   }
@@ -525,23 +648,40 @@ export async function buildVideoBaseName(
       if (rawTitle) {
         const sanitized = sanitizeBaseName(rawTitle, maxLen, minLen);
         
-        if (sanitized.length >= minLen && !isTooGenericName(sanitized)) {
-          Logger.info("[VIDEO_FILENAME] using OpenAI title", {
+        const isGeneric = isTooGenericName(sanitized);
+        const tokens = tokenizeName(sanitized);
+        const genericTokens = tokens.filter(t => GENERIC_STOP_WORDS.includes(t));
+        const brandTokens = tokens.filter(t => BRAND_WORDS.includes(t));
+        
+        if (sanitized.length >= minLen && !isGeneric) {
+          Logger.info("[BASENAME] source=openai", {
             rawTitle,
-            sanitized,
-            length: sanitized.length
+            baseName: sanitized,
+            length: sanitized.length,
+            tokens,
+            brandTokens: brandTokens.length > 0 ? brandTokens : undefined,
+            reason: "valid_openai_title"
           });
           return {
             baseName: sanitized,
             source: "openai",
-            rawTitle
+            rawTitle,
+            reason: "valid_openai_title"
           };
         } else {
-          Logger.warn("[VIDEO_FILENAME] OpenAI title too short or generic, falling back", {
+          const reason = sanitized.length < minLen 
+            ? `too_short_${sanitized.length}_chars` 
+            : `generic_tokens_${genericTokens.join("_")}`;
+          
+          Logger.warn("[BASENAME] source=openai rejected, falling back", {
             rawTitle,
-            sanitized,
+            baseName: sanitized,
             length: sanitized.length,
-            isGeneric: isTooGenericName(sanitized)
+            tokens,
+            genericTokens: genericTokens.length > 0 ? genericTokens : undefined,
+            brandTokens: brandTokens.length > 0 ? brandTokens : undefined,
+            isGeneric,
+            reason
           });
         }
       }
@@ -556,18 +696,42 @@ export async function buildVideoBaseName(
   if (promptText && promptText.trim().length > 10) {
     const fallbackName = fallbackNameFromPrompt(promptText, channelName || undefined, maxLen, minLen);
     const sanitized = sanitizeBaseName(fallbackName, maxLen, minLen);
+    const isGeneric = isTooGenericName(sanitized);
+    const tokens = tokenizeName(sanitized);
+    const genericTokens = tokens.filter(t => GENERIC_STOP_WORDS.includes(t));
+    const brandTokens = tokens.filter(t => BRAND_WORDS.includes(t));
     
-    if (sanitized.length >= minLen) {
-      Logger.info("[VIDEO_FILENAME] using fallback from prompt", {
-        fallbackName,
-        sanitized,
-        length: sanitized.length
+    if (sanitized.length >= minLen && !isGeneric) {
+      Logger.info("[BASENAME] source=fallback", {
+        rawTitle: fallbackName,
+        baseName: sanitized,
+        length: sanitized.length,
+        tokens,
+        brandTokens: brandTokens.length > 0 ? brandTokens : undefined,
+        reason: "extracted_from_prompt_keywords"
       });
       return {
         baseName: sanitized,
         source: "fallback",
         rawTitle: fallbackName,
-        reason: "extracted from prompt keywords"
+        reason: "extracted_from_prompt_keywords"
+      };
+    } else if (sanitized.length >= minLen && isGeneric && brandTokens.length > 0) {
+      // Если есть бренд-токены, но всё равно generic - используем
+      Logger.warn("[BASENAME] source=fallback with brand tokens but marked generic, using anyway", {
+        rawTitle: fallbackName,
+        baseName: sanitized,
+        length: sanitized.length,
+        tokens,
+        genericTokens,
+        brandTokens,
+        reason: "fallback_with_brand_but_generic_using_anyway"
+      });
+      return {
+        baseName: sanitized,
+        source: "fallback",
+        rawTitle: fallbackName,
+        reason: "fallback_with_brand_but_generic_using_anyway"
       };
     }
   }
@@ -581,17 +745,42 @@ export async function buildVideoBaseName(
       // Берём первые 2-3 ключевых слова
       const keywordName = keywords.slice(0, 3).join("_");
       const sanitized = sanitizeBaseName(keywordName, maxLen, minLen);
-      if (sanitized.length >= minLen) {
-        Logger.warn("[VIDEO_FILENAME] using keywords fallback (NO CHANNEL, NO TIMESTAMP)", {
-          keywords,
-          sanitized,
-          reason: "extracted keywords from prompt as last resort"
+      const isGeneric = isTooGenericName(sanitized);
+      const tokens = tokenizeName(sanitized);
+      const genericTokens = tokens.filter(t => GENERIC_STOP_WORDS.includes(t));
+      const brandTokens = tokens.filter(t => BRAND_WORDS.includes(t));
+      
+      if (sanitized.length >= minLen && !isGeneric) {
+        Logger.info("[BASENAME] source=fallback", {
+          rawTitle: keywordName,
+          baseName: sanitized,
+          length: sanitized.length,
+          tokens,
+          brandTokens: brandTokens.length > 0 ? brandTokens : undefined,
+          reason: "keywords_from_prompt_no_channel_no_timestamp"
         });
         return {
           baseName: sanitized,
           source: "fallback",
           rawTitle: keywordName,
-          reason: "keywords from prompt (no channel, no timestamp)"
+          reason: "keywords_from_prompt_no_channel_no_timestamp"
+        };
+      } else if (sanitized.length >= minLen && isGeneric && brandTokens.length > 0) {
+        // Если есть бренд, используем даже если generic
+        Logger.warn("[BASENAME] source=fallback with brand, using despite generic", {
+          rawTitle: keywordName,
+          baseName: sanitized,
+          length: sanitized.length,
+          tokens,
+          genericTokens,
+          brandTokens,
+          reason: "keywords_with_brand_using_despite_generic"
+        });
+        return {
+          baseName: sanitized,
+          source: "fallback",
+          rawTitle: keywordName,
+          reason: "keywords_with_brand_using_despite_generic"
         };
       }
     }
@@ -600,17 +789,20 @@ export async function buildVideoBaseName(
   // Если ничего не помогло - используем generic "video" с случайным суффиксом (БЕЗ channelSlug и БЕЗ даты!)
   const randomWord = Math.random().toString(36).substring(2, 8);
   const finalFallback = `video_${randomWord}`;
+  const tokens = tokenizeName(finalFallback);
 
-  Logger.warn("[VIDEO_FILENAME] using final fallback (NO CHANNEL, NO TIMESTAMP)", {
-    finalFallback,
-    reason: "no valid title could be generated, using generic video_<random>"
+  Logger.warn("[BASENAME] source=fallback", {
+    rawTitle: finalFallback,
+    baseName: finalFallback.substring(0, maxLen),
+    tokens,
+    reason: "final_fallback_video_random_no_channel_no_timestamp"
   });
 
   return {
     baseName: finalFallback.substring(0, maxLen),
     source: "fallback",
     rawTitle: finalFallback,
-    reason: "final fallback: video_<random> (no channel, no timestamp)"
+    reason: "final_fallback_video_random_no_channel_no_timestamp"
   };
 }
 
@@ -676,5 +868,173 @@ export async function resolveCollision(
   }
 
   return candidate;
+}
+
+/**
+ * Генерирует короткий стабильный ID для имени файла
+ * Формат: 6 символов [a-z0-9]
+ */
+function generateShortId(): string {
+  // Используем timestamp + random для уникальности
+  const timestamp = Date.now().toString(36); // base36 для компактности
+  const random = Math.random().toString(36).substring(2, 8);
+  // Комбинируем и берём первые 6 символов
+  const combined = (timestamp + random).replace(/[^a-z0-9]/g, '').substring(0, 6);
+  // Если получилось меньше 6, дополняем случайными символами
+  if (combined.length < 6) {
+    const padding = Math.random().toString(36).substring(2, 2 + (6 - combined.length));
+    return (combined + padding).substring(0, 6);
+  }
+  return combined.substring(0, 6);
+}
+
+/**
+ * ЕДИНАЯ функция генерации имени файла для автоматизации
+ * ВСЕГДА возвращает формат: video_<shortId>.mp4
+ * 
+ * @param params - Параметры генерации
+ * @param params.source - Источник файла (для логирования)
+ * @param params.channelId - ID канала (для логирования)
+ * @param params.userId - ID пользователя (для логирования)
+ * @param params.targetDir - Директория для проверки коллизий
+ * @returns Имя файла в формате video_<shortId>.mp4 (с расширением)
+ */
+export async function generateVideoFilename(params: {
+  source: string;
+  channelId: string;
+  userId: string;
+  targetDir: string;
+}): Promise<string> {
+  const { source, channelId, userId, targetDir } = params;
+  
+  // Генерируем короткий ID
+  const shortId = generateShortId();
+  const baseName = `video_${shortId}`;
+  
+  // Проверяем коллизии и получаем финальное имя
+  const finalBaseName = await resolveCollision(targetDir, baseName, ".mp4");
+  const finalFileName = `${finalBaseName}.mp4`;
+  
+  // Детальное логирование
+  const collisionDetected = finalBaseName !== baseName;
+  Logger.info("[FILENAME] Generated video filename for automation", {
+    source,
+    channelId,
+    userId,
+    requestedName: baseName,
+    finalName: finalFileName,
+    reason: collisionDetected ? "collision_resolved" : "standard",
+    shortId,
+    collisionDetected
+  });
+  
+  return finalFileName;
+}
+
+/**
+ * Проверяет, является ли имя файла title-based (неправильным для автоматизации)
+ * Правильные имена: video_<shortId>.mp4 (где shortId - 6 символов [a-z0-9])
+ * Неправильные: длинные имена с подчёркиваниями, содержащие слова
+ */
+export function isTitleBasedFilename(fileName: string): boolean {
+  // Убираем расширение
+  const nameWithoutExt = fileName.replace(/\.mp4$/i, '');
+  
+  // Правильный формат: video_<6 символов [a-z0-9]>
+  const correctPattern = /^video_[a-z0-9]{6}$/i;
+  
+  if (correctPattern.test(nameWithoutExt)) {
+    return false; // Правильное имя
+  }
+  
+  // Если начинается с video_ но не соответствует паттерну - возможно с суффиксом коллизии
+  if (nameWithoutExt.startsWith('video_')) {
+    const withSuffixPattern = /^video_[a-z0-9]{6}_\d+$/i;
+    if (withSuffixPattern.test(nameWithoutExt)) {
+      return false; // Правильное имя с суффиксом коллизии
+    }
+  }
+  
+  // Если имя длиннее 20 символов (без расширения) - скорее всего title-based
+  if (nameWithoutExt.length > 20) {
+    return true;
+  }
+  
+  // Если содержит более 2 подчёркиваний (кроме video_<id>_<suffix>) - title-based
+  const underscoreCount = (nameWithoutExt.match(/_/g) || []).length;
+  if (underscoreCount > 2) {
+    return true;
+  }
+  
+  // Если не начинается с "video_" - точно не наш формат
+  if (!nameWithoutExt.toLowerCase().startsWith('video_')) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Нормализует входящий файл с "плохим" именем в правильный формат
+ * Переименовывает файл из title-based имени в video_<shortId>.mp4
+ * 
+ * @param filePath - Полный путь к файлу
+ * @param fileName - Текущее имя файла
+ * @param targetDir - Директория, где находится файл
+ * @param channelId - ID канала (для логирования)
+ * @param userId - ID пользователя (для логирования)
+ * @returns Новое имя файла в формате video_<shortId>.mp4
+ */
+export async function normalizeIncomingFilename(
+  filePath: string,
+  fileName: string,
+  targetDir: string,
+  channelId: string,
+  userId: string
+): Promise<string> {
+  Logger.warn("[FILENAME][WARN] Title-based filename detected, normalizing", {
+    source: "inbox_monitor",
+    channelId,
+    userId,
+    oldFileName: fileName,
+    filePath
+  });
+  
+  // Генерируем новое правильное имя
+  const newFileName = await generateVideoFilename({
+    source: "normalize_incoming",
+    channelId,
+    userId,
+    targetDir
+  });
+  
+  const newFilePath = path.join(targetDir, newFileName);
+  
+  try {
+    // Переименовываем файл
+    await fs.rename(filePath, newFilePath);
+    
+    Logger.info("[FILENAME] File normalized successfully", {
+      source: "normalize_incoming",
+      channelId,
+      userId,
+      oldFileName: fileName,
+      newFileName,
+      oldPath: filePath,
+      newPath: newFilePath
+    });
+    
+    return newFileName;
+  } catch (error: any) {
+    Logger.error("[FILENAME] Failed to normalize file", {
+      source: "normalize_incoming",
+      channelId,
+      userId,
+      oldFileName: fileName,
+      newFileName,
+      error: error?.message || String(error)
+    });
+    throw error;
+  }
 }
 

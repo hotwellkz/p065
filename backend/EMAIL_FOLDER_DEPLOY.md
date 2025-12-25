@@ -139,3 +139,4 @@ ssh adminv@192.168.100.222 "sudo /usr/local/bin/docker compose -f /volume1/docke
 4. **Fallback** - при удалении пользователя система проверяет оба формата (новый и старый)
 
 
+

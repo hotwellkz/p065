@@ -96,3 +96,4 @@ sudo /usr/local/bin/docker compose exec backend sh -c '
 4. ✅ Диагностический endpoint `/api/diag/storage` показывает правильные пути
 
 
+

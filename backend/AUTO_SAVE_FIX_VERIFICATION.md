@@ -117,3 +117,4 @@ ssh adminv@192.168.100.222 "sudo /usr/local/bin/docker compose logs backend --ta
 ```
 
 
+

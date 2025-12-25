@@ -16,6 +16,8 @@ export type GenerationMode = "script" | "prompt" | "video-prompt-only";
 
 export type GenerationTransport = "telegram_global" | "telegram_user";
 
+export type ChannelType = "shorts" | "music_clips";
+
 export type PreferencesMode = "cyclic" | "random" | "fixed";
 
 export interface PreferenceVariant {
@@ -39,9 +41,27 @@ export interface ChannelAutoSendSchedule {
   lastRunAt?: string | null; // ISO-дата последнего запуска
 }
 
+export interface MusicClipsSettings {
+  targetDurationSec: number; // Целевая длительность финального видео (например 60)
+  clipSec: number; // Длительность одного сегмента (по умолчанию 10)
+  segmentDelayMs: number; // Задержка между запусками сегментов (по умолчанию 30000)
+  maxParallelSegments: number; // Максимум параллельных сегментов (по умолчанию 1)
+  maxRetries: number; // Максимум попыток для сегмента (по умолчанию 3)
+  retryDelayMs: number; // Задержка между ретраями (по умолчанию 60000)
+  sunoPrompt: string; // Промпт для генерации музыки через Suno
+  styleTags?: string[]; // Опциональные теги стиля для Suno
+  platforms?: {
+    youtube?: boolean;
+    tiktok?: boolean;
+    instagram?: boolean;
+  };
+  language?: string; // Опциональный язык
+}
+
 export interface Channel {
   id: string;
   name: string;
+  type?: ChannelType; // Тип канала: "shorts" (по умолчанию) или "music_clips"
   // TODO: slug can be added later for prettier file names, currently not stored explicitly
   platform: SupportedPlatform;
   language: SupportedLanguage;
@@ -55,6 +75,7 @@ export interface Channel {
   generationMode?: GenerationMode; // По умолчанию "script" для обратной совместимости
   generationTransport?: GenerationTransport; // Источник отправки промптов: telegram_global или telegram_user
   telegramSyntaxPeer?: string | null; // Username или ID чата Syntax (например @SyntaxAI)
+  musicClipsSettings?: MusicClipsSettings; // Настройки для каналов типа music_clips
   youtubeUrl?: string | null; // Ссылка на YouTube канал
   tiktokUrl?: string | null; // Ссылка на TikTok канал
   instagramUrl?: string | null; // Ссылка на Instagram канал
@@ -234,6 +255,12 @@ export const channelConverter: FirestoreDataConverter<Channel> = {
     }
     if (rest.blotataBlueskyId !== undefined) {
       data.blotataBlueskyId = rest.blotataBlueskyId;
+    }
+    if (rest.type !== undefined) {
+      data.type = rest.type;
+    }
+    if (rest.musicClipsSettings !== undefined) {
+      data.musicClipsSettings = rest.musicClipsSettings;
     }
     
     return data;

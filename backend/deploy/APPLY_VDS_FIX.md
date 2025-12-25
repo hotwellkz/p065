@@ -126,3 +126,4 @@ sudo docker compose logs -f backend | grep -i "media\|blotato\|validation"
 4. ✅ Нет ошибки "Failed to read media metadata"
 
 
+

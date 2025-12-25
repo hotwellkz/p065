@@ -17,3 +17,4 @@ echo "Rules added to /etc/sudoers"
 echo "Test with: sudo -n /usr/local/bin/docker ps"
 
 
+
