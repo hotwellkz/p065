@@ -604,7 +604,7 @@ const ChannelListPage = () => {
         {/* Десктопная версия заголовка */}
         <header className="hidden flex-col gap-3 rounded-2xl channels-premium-header p-4 md:flex lg:p-5">
           {/* Основной контейнер: заголовок слева, кнопки справа */}
-          <div className="flex items-start justify-between gap-4 lg:gap-6 flex-wrap lg:flex-nowrap">
+          <div className="flex items-start justify-between gap-3 lg:gap-6 flex-wrap">
             {/* Левая часть: заголовок и описание - фиксированная минимальная ширина, не сжимается */}
             <div className="flex-1 min-w-[240px] lg:min-w-[280px] lg:max-w-[50%]">
               <div className="flex items-baseline gap-2 flex-wrap mb-1">
@@ -626,10 +626,10 @@ const ChannelListPage = () => {
               </p>
             </div>
 
-            {/* Правая часть: кнопки, переключатели, аватар - адаптивная с wrap на tablet */}
-            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end w-full lg:w-auto">
-              {/* Группа основных кнопок - адаптивная с dropdown */}
-              <div className="flex items-center gap-1.5 flex-wrap w-full lg:w-auto justify-end">
+            {/* Правая часть: разделена на leftGroup (кнопки) и rightGroup (уведомления + профиль) */}
+            <div className="flex items-center gap-2 flex-wrap flex-1 lg:flex-0 lg:flex-initial min-w-0 lg:min-w-[520px] justify-end">
+              {/* leftGroup: основные кнопки и переключатели */}
+              <div className="flex items-center gap-1.5 flex-wrap flex-1 lg:flex-0 lg:flex-initial min-w-0 justify-end max-w-full">
                 {/* Кнопка Создать - всегда видна */}
                 <button
                   type="button"
@@ -785,7 +785,7 @@ const ChannelListPage = () => {
                 </div>
               </div>
               {/* Переключатель раскладки Grid/List/Compact */}
-              <div className="hidden md:flex items-center gap-0.5 rounded-xl premium-btn-secondary p-0.5">
+              <div className="hidden md:flex items-center gap-0.5 rounded-xl premium-btn-secondary p-0.5 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => setLayoutMode("grid")}
@@ -823,8 +823,11 @@ const ChannelListPage = () => {
                   <AlignJustify size={14} className="lg:w-4 lg:h-4" />
                 </button>
               </div>
-              <NotificationBell />
-              <UserMenu />
+              {/* rightGroup: уведомления и профиль - на узких экранах переходит на новую строку */}
+              <div className="flex items-center gap-2 flex-shrink-0 w-full lg:w-auto justify-end lg:justify-start">
+                <NotificationBell />
+                <UserMenu />
+              </div>
             </div>
           </div>
 
