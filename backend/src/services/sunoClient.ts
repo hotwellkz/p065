@@ -441,7 +441,10 @@ export class SunoClient {
             error.code = "SUNO_AUTH_ERROR";
           } else if (response.status === 429) {
             error.code = "SUNO_RATE_LIMITED";
-          } else if (response.status === 402 || response.data?.msg?.toLowerCase().includes("credit") || response.data?.message?.toLowerCase().includes("credit")) {
+          } else if (response.status === 402 || 
+                     (response.data && typeof response.data === "object" && 
+                      ((typeof (response.data as any)?.msg === "string" && (response.data as any).msg.toLowerCase().includes("credit")) || 
+                       (typeof (response.data as any)?.message === "string" && (response.data as any).message.toLowerCase().includes("credit"))))) {
             error.code = "SUNO_NO_CREDITS";
           } else if (response.status >= 500) {
             error.code = "SUNO_UNAVAILABLE";
@@ -523,9 +526,10 @@ export class SunoClient {
         finalError.code = "SUNO_RATE_LIMITED";
         finalError.status = 429;
       } else if (finalStatus === 402 || 
-                 responseData?.msg?.toLowerCase().includes("credit") || 
-                 responseData?.message?.toLowerCase().includes("credit") ||
-                 responseData?.error?.toLowerCase().includes("credit")) {
+                 (typeof responseData === "object" && responseData !== null && 
+                  ((responseData as any)?.msg?.toLowerCase?.()?.includes("credit") || 
+                   (responseData as any)?.message?.toLowerCase?.()?.includes("credit") ||
+                   (responseData as any)?.error?.toLowerCase?.()?.includes("credit")))) {
         finalError.code = "SUNO_NO_CREDITS";
         finalError.status = finalStatus || 402;
       } else if (finalStatus === 503 || finalStatus === 502 || finalStatus === 504) {
