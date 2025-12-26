@@ -30,6 +30,9 @@ services:
     environment:
       - PORT=${BACKEND_PORT:-3000}
       - NODE_ENV=production
+      # Suno API для Music Clips
+      - SUNO_API_KEY=${SUNO_API_KEY:-}
+      - SUNO_API_BASE_URL=${SUNO_API_BASE_URL:-https://api.suno.ai}
     
     # Монтирование volumes для сохранения данных на хосте
     # ВАЖНО: storage маппится на /app/storage внутри контейнера

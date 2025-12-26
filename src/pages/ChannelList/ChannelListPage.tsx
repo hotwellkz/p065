@@ -32,7 +32,7 @@ import { calculateChannelStates, type ChannelStateInfo } from "../../utils/chann
 import { fetchScheduleSettings } from "../../api/scheduleSettings";
 import { getAuthToken } from "../../utils/auth";
 import { getUserSettings, updateUserSettings } from "../../api/userSettings";
-import { runMusicClipsOnce } from "../../api/musicClips";
+import { runMusicClipsOnce, getMusicClipsTaskStatus } from "../../api/musicClips";
 
 const backendBaseUrl =
   (import.meta.env.VITE_BACKEND_URL as string | undefined) ||
@@ -436,32 +436,132 @@ const ChannelListPage = () => {
 
     setRunningMusicClips(prev => new Set(prev).add(channel.id));
 
+    let result: any = null;
+    let shouldStopLoading = true;
+
     try {
-      const result = await runMusicClipsOnce(channel.id, user.uid);
+      result = await runMusicClipsOnce(channel.id, user.uid);
       
-      if (result.success) {
+      // Если получен статус PROCESSING (202), начинаем polling
+      if (result.status === "PROCESSING" && result.taskId) {
+        shouldStopLoading = false; // Не останавливаем индикатор, polling продолжается
         setToast({
-          message: `Music Clips запущен успешно! Платформы: ${result.publishedPlatforms?.join(", ") || "не указаны"}`,
+          message: "Генерация музыки запущена, ожидаем завершения...",
+          type: "info"
+        });
+
+        // Polling статуса задачи
+        const pollTaskStatus = async (taskId: string): Promise<void> => {
+          const maxAttempts = 60; // 5 минут при интервале 5 сек
+          const pollInterval = 5000; // 5 секунд
+          let attempt = 0;
+
+          while (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, pollInterval));
+            attempt++;
+
+            try {
+              const statusResult = await getMusicClipsTaskStatus(taskId, user.uid);
+              
+              if (statusResult.status === "DONE") {
+                setToast({
+                  message: `Music Clips завершён успешно!${statusResult.audioUrl ? " Аудио готово." : ""}`,
+                  type: "success"
+                });
+                setRunningMusicClips(prev => {
+                  const next = new Set(prev);
+                  next.delete(channel.id);
+                  return next;
+                });
+                return;
+              } else if (statusResult.status === "FAILED") {
+                setToast({
+                  message: `Генерация музыки провалилась: ${statusResult.errorMessage || "Неизвестная ошибка"}`,
+                  type: "error"
+                });
+                setRunningMusicClips(prev => {
+                  const next = new Set(prev);
+                  next.delete(channel.id);
+                  return next;
+                });
+                return;
+              }
+              // PROCESSING - продолжаем polling
+            } catch (error: any) {
+              console.error("Error polling task status:", error);
+              // Продолжаем polling при ошибке (но не более maxAttempts раз)
+            }
+          }
+
+          // Timeout
+          setToast({
+            message: "Превышено время ожидания генерации. Проверьте статус позже.",
+            type: "warning"
+          });
+          setRunningMusicClips(prev => {
+            const next = new Set(prev);
+            next.delete(channel.id);
+            return next;
+          });
+        };
+
+        // Запускаем polling в фоне
+        pollTaskStatus(result.taskId).catch(error => {
+          console.error("Polling error:", error);
+          setRunningMusicClips(prev => {
+            const next = new Set(prev);
+            next.delete(channel.id);
+            return next;
+          });
+        });
+
+        return; // Не останавливаем индикатор загрузки, polling продолжается
+      }
+      
+      // Синхронный успех (200 DONE)
+      if (result.success && result.status === "DONE") {
+        setToast({
+          message: `Music Clips завершён успешно! Платформы: ${result.publishedPlatforms?.join(", ") || "не указаны"}`,
+          type: "success"
+        });
+      } else if (result.success) {
+        // Другие успешные статусы
+        setToast({
+          message: result.message || "Music Clips запущен успешно!",
           type: "success"
         });
       } else {
+        // Ошибка
         setToast({
-          message: result.error || "Ошибка при запуске Music Clips",
+          message: result.error || result.message || "Ошибка при запуске Music Clips",
           type: "error"
         });
       }
     } catch (error: any) {
       console.error("Error running music clips:", error);
-      setToast({
-        message: error?.message || "Ошибка при запуске Music Clips",
-        type: "error"
-      });
+      const errorMessage = error?.message || "Ошибка при запуске Music Clips";
+      
+      // Специальная обработка для ошибки отсутствия кредитов
+      if (errorMessage.includes("SUNO_NO_CREDITS") || errorMessage.includes("кредит")) {
+        setToast({
+          message: "Недостаточно кредитов Suno для генерации. Пополните баланс.",
+          type: "error"
+        });
+      } else {
+        setToast({
+          message: errorMessage,
+          type: "error"
+        });
+      }
     } finally {
-      setRunningMusicClips(prev => {
-        const next = new Set(prev);
-        next.delete(channel.id);
-        return next;
-      });
+      // Останавливаем индикатор только если не начался polling
+      if (shouldStopLoading) {
+        setRunningMusicClips(prev => {
+          const next = new Set(prev);
+          next.delete(channel.id);
+          return next;
+        });
+      }
     }
   };
 

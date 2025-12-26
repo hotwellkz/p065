@@ -40,14 +40,78 @@ Music Clips используют **отдельную** корневую дир�
 # Music Clips Root (опционально, по умолчанию /app/storage/music_clips)
 MUSIC_CLIPS_ROOT=/app/storage/music_clips
 
-# Suno API
+# Suno API (ОБЯЗАТЕЛЬНО для работы Music Clips)
+# Без этого ключа Music Clips функциональность будет недоступна
+# Получите API ключ на https://sunoapi.org
 SUNO_API_KEY=your_suno_api_key_here
-SUNO_API_BASE_URL=https://api.suno.ai
+# Базовый URL API (по умолчанию https://api.sunoapi.org согласно документации)
+SUNO_API_BASE_URL=https://api.sunoapi.org
+# Таймаут для запросов к Suno (мс, по умолчанию 90000 = 90 секунд)
+SUNO_REQUEST_TIMEOUT_MS=90000
+# Ограничение параллельных запросов к Suno (по умолчанию 1, рекомендуется 1-2)
+MUSIC_CLIPS_SUNO_CONCURRENCY=1
+# Задержка между запросами к Suno (мс, по умолчанию 1500)
+MUSIC_CLIPS_SUNO_DELAY_MS=1500
+# Общий таймаут для пайплайна Music Clips (мс, по умолчанию 1800000 = 30 минут)
+MUSIC_CLIPS_PIPELINE_TIMEOUT_MS=1800000
 
 # Публичный URL для Blotato (обязательно для публикации)
 PUBLIC_BASE_URL=https://api.shortsai.ru
 # или
 BACKEND_URL=https://api.shortsai.ru
+```
+
+### Валидация конфигурации
+
+При старте приложения проверяется наличие `SUNO_API_KEY`. Если ключ не задан:
+- В логах появится предупреждение: `[Startup] SUNO_API_KEY is not configured`
+- Запросы к `/api/music-clips/channels/:id/runOnce` вернут `503` с ошибкой:
+  ```json
+  {
+    "success": false,
+    "error": "SUNO_API_KEY_NOT_CONFIGURED",
+    "message": "Set SUNO_API_KEY in environment"
+  }
+  ```
+
+### Health Check
+
+Проверить конфигурацию Music Clips можно через health check endpoint:
+
+```bash
+GET /api/music-clips/health
+```
+
+**Ответ при правильной конфигурации (200):**
+```json
+{
+  "ok": true,
+  "suno": {
+    "configured": true,
+    "reason": null
+  },
+  "storage": {
+    "root": "/app/storage/music_clips",
+    "available": true
+  },
+  "timestamp": "2024-12-25T23:00:00.000Z"
+}
+```
+
+**Ответ при отсутствии ключа (503):**
+```json
+{
+  "ok": false,
+  "suno": {
+    "configured": false,
+    "reason": "SUNO_API_KEY is not set in environment"
+  },
+  "storage": {
+    "root": "/app/storage/music_clips",
+    "available": true
+  },
+  "timestamp": "2024-12-25T23:00:00.000Z"
+}
 ```
 
 ## Настройка канала в БД
@@ -131,6 +195,9 @@ ffprobe -version
 ### 4. Тестирование API
 
 ```powershell
+# Проверить диагностику Suno (не тратит кредиты)
+curl.exe http://localhost:8080/api/music-clips/diagnostics/suno
+
 # Запустить пайплайн для канала (runOnce)
 $channelId = "your-channel-id"
 $userId = "your-user-id"
@@ -138,14 +205,45 @@ $body = @{
     userId = $userId
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:8080/api/music-clips/channels/$channelId/runOnce" `
-    -Method POST `
-    -Body $body `
-    -ContentType "application/json" `
-    -Headers @{
-        "Authorization" = "Bearer YOUR_JWT_TOKEN"
-    }
+curl.exe -i -X POST "http://localhost:8080/api/music-clips/channels/$channelId/runOnce" `
+  -H "Content-Type: application/json" `
+  -H "x-user-id: $userId" `
+  -d $body
 ```
+
+**Возможные ошибки:**
+
+**503 - SUNO_UNAVAILABLE:**
+```json
+{
+  "success": false,
+  "error": "SUNO_UNAVAILABLE",
+  "message": "Suno is temporarily unavailable. Try later.",
+  "retryAfterSec": 30
+}
+```
+Система автоматически делает retry (до 5 попыток). Если все попытки исчерпаны, вернётся этот ответ.
+
+**429 - SUNO_RATE_LIMITED:**
+```json
+{
+  "success": false,
+  "error": "SUNO_RATE_LIMITED",
+  "message": "Suno rate limit exceeded. Try later.",
+  "retryAfterSec": 60
+}
+```
+Превышен лимит запросов. Система учитывает `Retry-After` заголовок от Suno.
+
+**503 - SUNO_API_KEY_NOT_CONFIGURED:**
+```json
+{
+  "success": false,
+  "error": "SUNO_API_KEY_NOT_CONFIGURED",
+  "message": "Set SUNO_API_KEY in environment"
+}
+```
+Решение: Установите `SUNO_API_KEY` в переменных окружения.
 
 ### 5. Проверка структуры папок
 

@@ -10,6 +10,7 @@ import { Logger } from "../utils/logger";
 import { processMusicClipsChannel } from "../services/musicClipsPipeline";
 import { db, isFirestoreAvailable } from "../services/firebaseAdmin";
 import { getStorageService } from "../services/storageService";
+import { getSunoClient } from "../services/sunoClient";
 import type { Channel } from "../types/channel";
 
 const router = express.Router();
@@ -85,32 +86,233 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
       });
     }
 
+    // Проверяем конфигурацию Suno API
+    const sunoClient = getSunoClient();
+    if (!sunoClient.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: "SUNO_API_KEY_NOT_CONFIGURED",
+        message: "Set SUNO_API_KEY in environment"
+      });
+    }
+
+    // (Опционально) Проверяем кредиты перед запуском
+    try {
+      const credits = await sunoClient.getCredits();
+      if (credits.credits <= 0) {
+        Logger.warn("[MusicClipsAPI] No credits available", {
+          channelId,
+          userId,
+          credits: credits.credits
+        });
+        return res.status(402).json({
+          success: false,
+          error: "SUNO_NO_CREDITS",
+          message: "Недостаточно кредитов Suno для генерации. Пополните баланс.",
+          credits: credits.credits
+        });
+      }
+      Logger.info("[MusicClipsAPI] Credits available", {
+        channelId,
+        credits: credits.credits
+      });
+    } catch (error: any) {
+      Logger.warn("[MusicClipsAPI] Failed to check credits, continuing anyway", {
+        channelId,
+        userId,
+        error: error?.message || String(error)
+      });
+      // Продолжаем выполнение, если проверка кредитов не удалась
+    }
+
     // Запускаем пайплайн
     const result = await processMusicClipsChannel(channel, userId);
 
+    // Если пайплайн вернул PROCESSING (асинхронный taskId)
+    if (result.status === "PROCESSING" && result.taskId) {
+      Logger.info("[MusicClipsAPI] Returning PROCESSING status", {
+        channelId,
+        userId,
+        taskId: result.taskId
+      });
+      return res.status(202).json({
+        success: true,
+        ok: true,
+        status: "PROCESSING",
+        taskId: result.taskId,
+        message: "Генерация запущена, используйте GET /api/music-clips/tasks/:taskId для проверки статуса"
+      });
+    }
+
+    // Если пайплайн вернул FAILED
+    if (result.status === "FAILED") {
+      Logger.error("[MusicClipsAPI] Pipeline failed", {
+        channelId,
+        userId,
+        error: result.error,
+        taskId: result.taskId
+      });
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        status: "FAILED",
+        error: result.error || "Pipeline failed",
+        taskId: result.taskId,
+        message: result.error || "Генерация музыки провалилась"
+      });
+    }
+
+    // Успешное завершение
     if (result.success) {
+      Logger.info("[MusicClipsAPI] Pipeline completed successfully", {
+        channelId,
+        userId,
+        publishedPlatforms: result.publishedPlatforms
+      });
       return res.json({
         success: true,
+        ok: true,
+        status: "DONE",
         trackPath: result.trackPath,
         finalVideoPath: result.finalVideoPath,
         publishedPlatforms: result.publishedPlatforms
       });
-    } else {
-      return res.status(500).json({
-        success: false,
-        error: result.error || "Pipeline failed"
-      });
     }
-  } catch (error: any) {
-    Logger.error("[MusicClipsAPI] runOnce error", {
+
+    // Неожиданный результат
+    Logger.error("[MusicClipsAPI] Unexpected pipeline result", {
       channelId,
       userId,
-      error: error?.message || String(error)
+      result
     });
-
     return res.status(500).json({
       success: false,
-      error: error?.message || "Internal server error"
+      ok: false,
+      error: result.error || "Pipeline failed with unknown error"
+    });
+  } catch (error: any) {
+    const requestId = req.headers["x-request-id"] || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    Logger.error("[MusicClipsAPI] runOnce error", {
+      requestId,
+      channelId,
+      userId,
+      error: error?.message || String(error),
+      code: error?.code,
+      status: error?.status,
+      stack: error?.stack?.substring(0, 500)
+    });
+
+    // Специальная обработка для ошибки конфигурации Suno
+    if (error?.code === "SUNO_API_KEY_NOT_CONFIGURED" || error?.message?.includes("SUNO_API_KEY")) {
+      return res.status(503).json({
+        success: false,
+        ok: false,
+        error: "SUNO_API_KEY_NOT_CONFIGURED",
+        message: "Set SUNO_API_KEY in environment",
+        requestId
+      });
+    }
+
+    // Обработка ошибки отсутствия кредитов
+    if (error?.code === "SUNO_NO_CREDITS" || error?.message?.includes("credits") || error?.message?.includes("SUNO_NO_CREDITS")) {
+      return res.status(402).json({
+        success: false,
+        ok: false,
+        error: "SUNO_NO_CREDITS",
+        message: "Недостаточно кредитов Suno для генерации. Пополните баланс.",
+        requestId
+      });
+    }
+
+    // Обработка ошибок Suno API
+    if (error?.code === "SUNO_ENDPOINT_NOT_FOUND") {
+      // 404 от Suno - неверный endpoint/baseURL
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_ENDPOINT_NOT_FOUND",
+        message: "Неверный endpoint Suno (проверь SUNO_API_BASE_URL и пути)",
+        code: error?.code,
+        status: error?.status,
+        requestId
+      });
+    }
+
+    if (error?.code === "SUNO_UNAVAILABLE") {
+      return res.status(503).json({
+        success: false,
+        ok: false,
+        error: "SUNO_UNAVAILABLE",
+        message: "Suno is temporarily unavailable. Try later.",
+        retryAfterSec: error?.retryAfterSec || 30,
+        requestId
+      });
+    }
+
+    if (error?.code === "SUNO_RATE_LIMITED") {
+      return res.status(429).json({
+        success: false,
+        ok: false,
+        error: "SUNO_RATE_LIMITED",
+        message: "Suno rate limit exceeded. Try later.",
+        retryAfterSec: error?.retryAfterSec || 60,
+        requestId
+      });
+    }
+
+    if (error?.code === "SUNO_AUTH_ERROR") {
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_AUTH_ERROR",
+        message: "Suno API authentication failed. Check SUNO_API_KEY.",
+        status: error?.status,
+        requestId
+      });
+    }
+
+    if (error?.code === "SUNO_UNEXPECTED_RESPONSE") {
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_UNEXPECTED_RESPONSE",
+        message: "Suno API вернул неожиданный формат ответа. Проверьте логи для деталей.",
+        code: error?.code,
+        requestId
+      });
+    }
+
+    if (error?.code === "SUNO_FAILED") {
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_FAILED",
+        message: "Suno вернул ошибку генерации",
+        details: error?.details,
+        requestId
+      });
+    }
+
+    // Для остальных ошибок Suno возвращаем 502 (Bad Gateway), а не 500
+    if (error?.code?.startsWith("SUNO_")) {
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: error?.code || "SUNO_ERROR",
+        message: error?.message || "Suno API error",
+        status: error?.status,
+        requestId
+      });
+    }
+
+    // Для внутренних ошибок возвращаем 500
+    return res.status(500).json({
+      success: false,
+      ok: false,
+      error: error?.message || "Internal server error",
+      code: error?.code,
+      requestId
     });
   }
 });
@@ -218,6 +420,204 @@ router.get("/media/:userFolderKey/:channelFolderKey/:fileName", async (req, res)
         message: error?.message || "Unknown error"
       });
     }
+  }
+});
+
+/**
+ * GET /api/music-clips/tasks/:taskId
+ * Проверка статуса задачи Suno
+ */
+router.get("/tasks/:taskId", async (req, res) => {
+  const { taskId } = req.params;
+  const userId = req.headers["x-user-id"] as string;
+  const requestId = req.headers["x-request-id"] || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      ok: false,
+      error: "User ID is required",
+      requestId
+    });
+  }
+
+  Logger.info("[MusicClipsAPI] getTaskStatus requested", {
+    requestId,
+    taskId,
+    userId
+  });
+
+  try {
+    const { getSunoClient } = await import("../services/sunoClient");
+    const sunoClient = getSunoClient();
+
+    if (!sunoClient.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        ok: false,
+        error: "SUNO_API_KEY_NOT_CONFIGURED",
+        message: "Set SUNO_API_KEY in environment",
+        requestId
+      });
+    }
+
+    const recordInfo = await sunoClient.getRecordInfo(taskId);
+
+    if (recordInfo.status === "SUCCESS" && recordInfo.audioUrl) {
+      Logger.info("[MusicClipsAPI] Task completed successfully", {
+        requestId,
+        taskId,
+        userId,
+        audioUrl: recordInfo.audioUrl.substring(0, 100) + "..."
+      });
+      return res.json({
+        success: true,
+        ok: true,
+        status: "DONE",
+        taskId,
+        audioUrl: recordInfo.audioUrl,
+        title: recordInfo.title,
+        duration: recordInfo.duration,
+        metadata: recordInfo.metadata,
+        requestId
+      });
+    }
+
+    if (recordInfo.status === "FAILED") {
+      Logger.error("[MusicClipsAPI] Task failed", {
+        requestId,
+        taskId,
+        userId,
+        errorMessage: recordInfo.errorMessage
+      });
+      return res.json({
+        success: false,
+        ok: false,
+        status: "FAILED",
+        taskId,
+        error: "SUNO_FAILED",
+        message: "Suno вернул ошибку генерации",
+        errorMessage: recordInfo.errorMessage,
+        requestId
+      });
+    }
+
+    // PENDING или GENERATING
+    Logger.debug("[MusicClipsAPI] Task still processing", {
+      requestId,
+      taskId,
+      userId,
+      status: recordInfo.status
+    });
+    return res.json({
+      success: true,
+      ok: true,
+      status: "PROCESSING",
+      taskId,
+      message: "Генерация ещё выполняется",
+      requestId
+    });
+  } catch (error: any) {
+    Logger.error("[MusicClipsAPI] getTaskStatus error", {
+      requestId,
+      taskId,
+      userId,
+      error: error?.message || String(error),
+      code: error?.code,
+      stack: error?.stack?.substring(0, 500)
+    });
+
+    if (error?.code === "SUNO_TASK_NOT_FOUND") {
+      return res.status(404).json({
+        success: false,
+        ok: false,
+        error: "TASK_NOT_FOUND",
+        message: `Task ${taskId} not found`,
+        requestId
+      });
+    }
+
+    // Для других ошибок Suno возвращаем 502, но с ok: false в теле
+    return res.status(502).json({
+      success: false,
+      ok: false,
+      error: error?.code || "SUNO_ERROR",
+      message: error?.message || "Failed to get task status",
+      requestId
+    });
+  }
+});
+
+/**
+ * GET /api/music-clips/diagnostics/suno
+ * Диагностический endpoint для проверки доступности Suno API
+ */
+router.get("/diagnostics/suno", async (req, res) => {
+  try {
+    const sunoClient = getSunoClient();
+    const pingResult = await sunoClient.ping();
+
+    const statusCode = pingResult.ok ? 200 : 503;
+    return res.status(statusCode).json({
+      ok: pingResult.ok,
+      suno: {
+        configured: sunoClient.isConfigured(),
+        available: pingResult.ok,
+        latency: pingResult.latency,
+        error: pingResult.error,
+        status: pingResult.status
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    Logger.error("[MusicClipsAPI] Diagnostics error", {
+      error: error?.message || String(error)
+    });
+
+    return res.status(503).json({
+      ok: false,
+      error: error?.message || "Diagnostics failed",
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+/**
+ * GET /api/music-clips/health
+ * Health check endpoint для проверки конфигурации Music Clips
+ */
+router.get("/health", async (req, res) => {
+  try {
+    const sunoClient = getSunoClient();
+    const isSunoConfigured = sunoClient.isConfigured();
+    const storage = getStorageService();
+    const musicClipsRoot = storage.getMusicClipsRoot();
+
+    const health = {
+      ok: isSunoConfigured,
+      suno: {
+        configured: isSunoConfigured,
+        reason: isSunoConfigured ? null : "SUNO_API_KEY is not set in environment"
+      },
+      storage: {
+        root: musicClipsRoot,
+        available: true
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    const statusCode = isSunoConfigured ? 200 : 503;
+    return res.status(statusCode).json(health);
+  } catch (error: any) {
+    Logger.error("[MusicClipsAPI] Health check error", {
+      error: error?.message || String(error)
+    });
+
+    return res.status(503).json({
+      ok: false,
+      error: error?.message || "Health check failed",
+      timestamp: new Date().toISOString()
+    });
   }
 });
 

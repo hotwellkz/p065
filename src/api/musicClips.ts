@@ -11,10 +11,28 @@ const backendBaseUrl =
 
 export interface MusicClipsRunOnceResponse {
   success: boolean;
+  ok?: boolean; // Дополнительное поле для совместимости
   error?: string;
   trackPath?: string;
   finalVideoPath?: string;
   publishedPlatforms?: string[];
+  status?: "PROCESSING" | "DONE" | "FAILED";
+  taskId?: string;
+  message?: string;
+  requestId?: string;
+}
+
+export interface MusicClipsTaskStatusResponse {
+  success: boolean;
+  ok?: boolean; // Дополнительное поле для совместимости
+  status: "PROCESSING" | "DONE" | "FAILED";
+  taskId: string;
+  audioUrl?: string;
+  title?: string;
+  duration?: number;
+  errorMessage?: string;
+  message?: string;
+  requestId?: string;
 }
 
 /**
@@ -41,14 +59,76 @@ export async function runMusicClipsOnce(
     }
   );
 
+  const data = await response.json().catch(() => ({}));
+
+  // 202 Accepted - задача создана, но ещё обрабатывается
+  if (response.status === 202) {
+    return {
+      ...data,
+      status: data.status || "PROCESSING"
+    } as MusicClipsRunOnceResponse;
+  }
+
+  // Ошибки
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
     throw new Error(
-      error.error || error.message || `Ошибка при запуске Music Clips: ${response.status}`
+      data.error || data.message || `Ошибка при запуске Music Clips: ${response.status}`
     );
   }
 
-  return response.json();
+  // 200 OK - успешное завершение
+  return {
+    ...data,
+    status: data.status || "DONE"
+  } as MusicClipsRunOnceResponse;
+}
+
+/**
+ * Проверяет статус задачи генерации музыки
+ * @param taskId - ID задачи Suno
+ * @param userId - ID пользователя
+ */
+export async function getMusicClipsTaskStatus(
+  taskId: string,
+  userId: string
+): Promise<MusicClipsTaskStatusResponse> {
+  const token = await getAuthToken();
+
+  const response = await fetch(
+    `${backendBaseUrl}/api/music-clips/tasks/${taskId}`,
+    {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        "x-user-id": userId
+      }
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  // 404 - задача не найдена
+  if (response.status === 404) {
+    throw new Error(data.message || `Задача ${taskId} не найдена`);
+  }
+
+  // 502/503 - ошибка Suno API
+  if (response.status >= 500 && response.status < 600) {
+    throw new Error(
+      data.error || data.message || `Ошибка Suno API: ${response.status}`
+    );
+  }
+
+  // 200 OK - возвращаем данные (может быть PROCESSING, DONE или FAILED)
+  if (response.ok) {
+    return data as MusicClipsTaskStatusResponse;
+  }
+
+  // Другие ошибки
+  throw new Error(
+    data.error || data.message || `Ошибка при проверке статуса: ${response.status}`
+  );
 }
 
 /**

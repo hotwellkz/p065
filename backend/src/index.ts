@@ -49,6 +49,7 @@ import mediaRoutes from "./routes/mediaRoutes";
 import musicClipsRoutes from "./routes/musicClipsRoutes";
 import { processAutoSendTick } from "./services/autoSendScheduler";
 import { getFirestoreInfo, isFirestoreAvailable } from "./services/firebaseAdmin";
+import { getSunoClient } from "./services/sunoClient";
 
 const app = express();
 const port = Number(process.env.PORT) || 8080;
@@ -135,7 +136,9 @@ app.use(
       "Accept",
       "Origin",
       "Access-Control-Request-Method",
-      "Access-Control-Request-Headers"
+      "Access-Control-Request-Headers",
+      "x-user-id",
+      "x-request-id"
     ],
     exposedHeaders: ["X-Request-ID", "X-App-Instance", "X-App-Version"]
   })
@@ -307,6 +310,24 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
+// Валидация конфигурации Music Clips при старте
+try {
+  const sunoClient = getSunoClient();
+  if (!sunoClient.isConfigured()) {
+    Logger.warn("[Startup] SUNO_API_KEY is not configured - Music Clips functionality will be unavailable", {
+      hint: "Set SUNO_API_KEY in environment variables"
+    });
+  } else {
+    Logger.info("[Startup] Music Clips configuration validated", {
+      sunoConfigured: true
+    });
+  }
+} catch (error: any) {
+  Logger.error("[Startup] Error validating Music Clips configuration", {
+    error: error?.message || String(error)
+  });
+}
+
 // Логируем подключенные маршруты для диагностики
 Logger.info("Backend routes registered", {
   routes: [
@@ -320,13 +341,15 @@ Logger.info("Backend routes registered", {
     "/api/channels",
     "/api/schedule",
     "/api/notifications",
-    "/api/media"
+    "/api/media",
+    "/api/music-clips"
   ],
   examplePaths: [
     "POST /api/telegram/fetchAndSaveToServer",
     "POST /api/telegram/fetchLatestVideoToDrive",
     "GET /api/telegram/status",
-    "GET /health"
+    "GET /health",
+    "GET /api/music-clips/health"
   ]
 });
 

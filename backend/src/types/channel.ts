@@ -51,6 +51,8 @@ export interface MusicClipsSettings {
     instagram?: boolean;
   };
   language?: string; // Опциональный язык
+  lastJobId?: string; // ID последнего job Suno (для асинхронного flow)
+  lastJobStatus?: "queued" | "processing" | "completed" | "failed"; // Статус последнего job
 }
 
 export interface Channel {

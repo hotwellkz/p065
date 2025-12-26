@@ -15,7 +15,8 @@ import * as path from "path";
 import { Logger } from "../utils/logger";
 import { Channel, MusicClipsSettings } from "../types/channel";
 import { getStorageService } from "./storageService";
-import { getSunoClient } from "./sunoClient";
+import { getSunoClient, SunoTrackResult } from "./sunoClient";
+import { getSunoQueue } from "./sunoQueue";
 import {
   getAudioInfo,
   getVideoInfo,
@@ -28,12 +29,67 @@ import { blottataPublisherService } from "./blottataPublisherService";
 import { runVideoGenerationForChannel } from "./videoGenerationService";
 import { db, isFirestoreAvailable } from "./firebaseAdmin";
 
+/**
+ * Сохранить taskId в канал для последующего polling
+ */
+async function saveMusicClipsTaskId(
+  channel: Channel & { ownerId?: string },
+  userId: string,
+  taskId: string
+): Promise<void> {
+  if (!isFirestoreAvailable() || !db || !channel.ownerId) {
+    Logger.warn("[MusicClips] Cannot save jobId: Firestore not available");
+    return;
+  }
+
+  try {
+    const channelRef = db
+      .collection("users")
+      .doc(channel.ownerId)
+      .collection("channels")
+      .doc(channel.id);
+
+    const channelSnap = await channelRef.get();
+    if (!channelSnap.exists) {
+      Logger.warn("[MusicClips] Cannot save jobId: channel not found", {
+        channelId: channel.id
+      });
+      return;
+    }
+
+    const currentData = channelSnap.data();
+    const currentSettings = currentData?.musicClipsSettings || {};
+
+    await channelRef.update({
+      musicClipsSettings: {
+        ...currentSettings,
+        lastJobId: taskId, // Сохраняем taskId в lastJobId для совместимости
+        lastJobStatus: "processing"
+      },
+      updatedAt: require("firebase-admin").firestore.FieldValue.serverTimestamp()
+    });
+
+    Logger.info("[MusicClips] TaskId saved to channel", {
+      channelId: channel.id,
+      taskId
+    });
+  } catch (error: any) {
+    Logger.error("[MusicClips] Failed to save taskId", {
+      channelId: channel.id,
+      taskId,
+      error: error?.message || String(error)
+    });
+  }
+}
+
 export interface MusicClipsPipelineResult {
   success: boolean;
   error?: string;
   trackPath?: string;
   finalVideoPath?: string;
   publishedPlatforms?: string[];
+  taskId?: string; // ID задачи Suno для асинхронного flow
+  status?: "PROCESSING" | "DONE" | "FAILED"; // Статус для асинхронного flow
 }
 
 /**
@@ -139,9 +195,29 @@ async function generateVideoSegment(
 }
 
 /**
- * Основной пайплайн обработки music_clips канала
+ * Основной пайплайн обработки music_clips канала с таймаутом
  */
 export async function processMusicClipsChannel(
+  channel: Channel & { ownerId?: string },
+  userId: string
+): Promise<MusicClipsPipelineResult> {
+  // Общий таймаут для всего пайплайна (по умолчанию 30 минут)
+  const pipelineTimeout = Number(process.env.MUSIC_CLIPS_PIPELINE_TIMEOUT_MS) || 1800000;
+
+  return Promise.race([
+    processMusicClipsChannelInternal(channel, userId),
+    new Promise<MusicClipsPipelineResult>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Pipeline timeout after ${pipelineTimeout}ms`));
+      }, pipelineTimeout);
+    })
+  ]);
+}
+
+/**
+ * Внутренняя реализация пайплайна
+ */
+async function processMusicClipsChannelInternal(
   channel: Channel & { ownerId?: string },
   userId: string
 ): Promise<MusicClipsPipelineResult> {
@@ -198,239 +274,351 @@ export async function processMusicClipsChannel(
     });
 
     const sunoClient = getSunoClient();
-    const trackResult = await sunoClient.createTrack(settings.sunoPrompt, settings.styleTags);
+    const sunoQueue = getSunoQueue();
 
-    // Скачиваем трек
-    const trackRawPath = path.join(trackDir, "track_raw.mp3");
-    await sunoClient.downloadAudio(trackResult.audioUrl, trackRawPath);
-
-    // Получаем длительность трека
-    const audioInfo = await getAudioInfo(trackRawPath);
-    Logger.info("[MusicClips] Track downloaded", {
-      trackRawPath,
-      duration: audioInfo.duration
-    });
-
-    // Приводим аудио к targetDurationSec
-    const trackTargetPath = path.join(trackDir, "track_target.mp3");
-    if (audioInfo.duration > settings.targetDurationSec) {
-      // Обрезаем
-      await trimAudio(trackRawPath, trackTargetPath, settings.targetDurationSec);
-    } else if (audioInfo.duration < settings.targetDurationSec) {
-      // Зацикливаем и обрезаем
-      await loopAndTrimAudio(trackRawPath, trackTargetPath, settings.targetDurationSec);
-    } else {
-      // Копируем как есть
-      await fs.copyFile(trackRawPath, trackTargetPath);
+    // Формируем полный промпт с тегами стиля
+    let fullPrompt = settings.sunoPrompt;
+    if (settings.styleTags && settings.styleTags.length > 0) {
+      const tagsStr = settings.styleTags.join(", ");
+      fullPrompt = `${settings.sunoPrompt} [${tagsStr}]`;
     }
 
-    Logger.info("[MusicClips] Track prepared", {
-      trackTargetPath,
-      targetDuration: settings.targetDurationSec
+    // (Опционально) Проверяем кредиты
+    try {
+      const credits = await sunoClient.getCredits();
+      if (credits.credits <= 0) {
+        Logger.warn("[MusicClips] No credits available", {
+          channelId: channel.id,
+          userId,
+          credits: credits.credits
+        });
+        const error = new Error("SUNO_NO_CREDITS") as Error & { code?: string };
+        error.code = "SUNO_NO_CREDITS";
+        throw error;
+      }
+      Logger.info("[MusicClips] Credits available", {
+        channelId: channel.id,
+        userId,
+        credits: credits.credits
+      });
+    } catch (error: any) {
+      // Если это ошибка отсутствия кредитов, пробрасываем дальше
+      if (error?.code === "SUNO_NO_CREDITS" || error?.message?.includes("SUNO_NO_CREDITS")) {
+        throw error;
+      }
+      Logger.warn("[MusicClips] Failed to check credits, continuing anyway", {
+        channelId: channel.id,
+        userId,
+        error: error?.message || String(error)
+      });
+      // Продолжаем выполнение, если проверка кредитов не удалась
+    }
+
+    // Используем новый generate API через очередь
+    const generateResult = await sunoQueue.add(() => 
+      sunoClient.generate({
+        prompt: fullPrompt,
+        customMode: false,
+        instrumental: false,
+        model: "V4_5ALL"
+      })
+    );
+
+    const taskId = generateResult.taskId;
+
+    // Сохраняем taskId в канал для последующего polling
+    await saveMusicClipsTaskId(channel, userId, taskId);
+
+    Logger.info("[MusicClips] Task created", {
+      taskId,
+      channelId: channel.id
     });
 
-    // ========== ШАГ B: Генерация видео-сегментов ==========
-    const segmentsCount = Math.ceil(settings.targetDurationSec / settings.clipSec);
-    Logger.info("[MusicClips] Step B: Generating video segments", {
-      segmentsCount,
-      clipSec: settings.clipSec,
-      targetDurationSec: settings.targetDurationSec
-    });
+    // Пытаемся дождаться результата (короткий таймаут 20-40 сек)
+    const waitTimeoutMs = Number(process.env.MUSIC_CLIPS_SUNO_WAIT_TIMEOUT_MS) || 30000; // 30 секунд по умолчанию
+    const pollIntervalMs = Number(process.env.MUSIC_CLIPS_SUNO_POLL_INTERVAL_MS) || 3000; // 3 секунды
 
-    const segmentPaths: string[] = [];
-    const activeGenerations: Promise<void>[] = [];
-    let currentParallel = 0;
+    try {
+      const recordInfo = await sunoClient.waitForResult(taskId, {
+        pollIntervalMs,
+        timeoutMs: waitTimeoutMs
+      });
 
-    for (let i = 0; i < segmentsCount; i++) {
-      const segmentPath = path.join(segmentsDir, `seg_${String(i).padStart(3, "0")}.mp4`);
+      if (recordInfo.status === "SUCCESS" && recordInfo.audioUrl) {
+        Logger.info("[MusicClips] Track generated successfully", {
+          taskId,
+          audioUrl: recordInfo.audioUrl.substring(0, 100) + "..."
+        });
 
-      // Проверяем, существует ли сегмент и валиден ли он
-      try {
-        const exists = await fs.access(segmentPath).then(() => true).catch(() => false);
-        if (exists) {
-          const videoInfo = await getVideoInfo(segmentPath);
-          if (videoInfo.duration > 0) {
-            Logger.info("[MusicClips] Segment already exists, skipping", {
-              segmentIndex: i,
-              segmentPath,
-              duration: videoInfo.duration
-            });
-            segmentPaths.push(segmentPath);
-            continue;
-          }
+        // Скачиваем трек
+        const trackRawPath = path.join(trackDir, "track_raw.mp3");
+        await sunoClient.downloadAudio(recordInfo.audioUrl, trackRawPath);
+
+        // Получаем длительность трека
+        const audioInfo = await getAudioInfo(trackRawPath);
+        Logger.info("[MusicClips] Track downloaded", {
+          trackRawPath,
+          duration: audioInfo.duration
+        });
+
+        // Приводим аудио к targetDurationSec
+        const trackTargetPath = path.join(trackDir, "track_target.mp3");
+        if (audioInfo.duration > settings.targetDurationSec) {
+          // Обрезаем
+          await trimAudio(trackRawPath, trackTargetPath, settings.targetDurationSec);
+        } else if (audioInfo.duration < settings.targetDurationSec) {
+          // Зацикливаем и обрезаем
+          await loopAndTrimAudio(trackRawPath, trackTargetPath, settings.targetDurationSec);
+        } else {
+          // Копируем как есть
+          await fs.copyFile(trackRawPath, trackTargetPath);
         }
-      } catch (error) {
-        // Сегмент не существует или невалиден, генерируем
-      }
 
-      // Ожидаем, если достигнут лимит параллельных
-      while (currentParallel >= settings.maxParallelSegments) {
-        await Promise.race(activeGenerations);
-        activeGenerations.splice(0, 1);
-        currentParallel--;
-      }
+        Logger.info("[MusicClips] Track processed", {
+          trackTargetPath,
+          targetDuration: settings.targetDurationSec
+        });
 
-      // Генерируем сегмент с ретраями
-      const generateSegment = async (): Promise<void> => {
-        let lastError: Error | null = null;
-        for (let retry = 0; retry < settings.maxRetries; retry++) {
+        // Продолжаем с остальным pipeline (сегменты, склейка, наложение, публикация)
+        // ========== ШАГ B: Генерация видео-сегментов ==========
+        const segmentsCount = Math.ceil(settings.targetDurationSec / settings.clipSec);
+        Logger.info("[MusicClips] Step B: Generating video segments", {
+          segmentsCount,
+          clipSec: settings.clipSec,
+          targetDurationSec: settings.targetDurationSec
+        });
+
+        const segmentPaths: string[] = [];
+        const activeGenerations: Promise<void>[] = [];
+        let currentParallel = 0;
+
+        for (let i = 0; i < segmentsCount; i++) {
+          const segmentPath = path.join(segmentsDir, `seg_${String(i).padStart(3, "0")}.mp4`);
+
+          // Проверяем, существует ли сегмент и валиден ли он
           try {
-            if (retry > 0) {
-              Logger.info("[MusicClips] Retrying segment generation", {
-                segmentIndex: i,
-                retry,
-                maxRetries: settings.maxRetries
-              });
-              await new Promise(resolve => setTimeout(resolve, settings.retryDelayMs));
+            const exists = await fs.access(segmentPath).then(() => true).catch(() => false);
+            if (exists) {
+              const videoInfo = await getVideoInfo(segmentPath);
+              if (videoInfo.duration > 0) {
+                Logger.info("[MusicClips] Segment already exists, skipping", {
+                  segmentIndex: i,
+                  segmentPath,
+                  duration: videoInfo.duration
+                });
+                segmentPaths.push(segmentPath);
+                continue;
+              }
             }
+          } catch (error) {
+            // Сегмент не существует или невалиден, генерируем
+          }
 
-            await generateVideoSegment(channel, userId, i, segmentsCount, settings, segmentPath);
-            segmentPaths.push(segmentPath);
-            return;
-          } catch (error: any) {
-            lastError = error;
-            Logger.warn("[MusicClips] Segment generation failed, will retry", {
-              segmentIndex: i,
-              retry,
-              error: error?.message || String(error)
-            });
+          // Ожидаем, если достигнут лимит параллельных
+          while (currentParallel >= settings.maxParallelSegments) {
+            await Promise.race(activeGenerations);
+            activeGenerations.splice(0, 1);
+            currentParallel--;
+          }
+
+          // Генерируем сегмент с ретраями
+          const generateSegment = async (): Promise<void> => {
+            let lastError: Error | null = null;
+            for (let retry = 0; retry < settings.maxRetries; retry++) {
+              try {
+                if (retry > 0) {
+                  Logger.info("[MusicClips] Retrying segment generation", {
+                    segmentIndex: i,
+                    retry,
+                    maxRetries: settings.maxRetries
+                  });
+                  await new Promise(resolve => setTimeout(resolve, settings.retryDelayMs));
+                }
+
+                await generateVideoSegment(channel, userId, i, segmentsCount, settings, segmentPath);
+                segmentPaths.push(segmentPath);
+                return;
+              } catch (error: any) {
+                lastError = error;
+                Logger.warn("[MusicClips] Segment generation failed, will retry", {
+                  segmentIndex: i,
+                  retry,
+                  error: error?.message || String(error)
+                });
+              }
+            }
+            throw lastError || new Error("Segment generation failed after retries");
+          };
+
+          activeGenerations.push(generateSegment());
+          currentParallel++;
+
+          // Задержка между запусками
+          if (i < segmentsCount - 1) {
+            await new Promise(resolve => setTimeout(resolve, settings.segmentDelayMs));
           }
         }
-        throw lastError || new Error("Segment generation failed after retries");
-      };
 
-      activeGenerations.push(generateSegment());
-      currentParallel++;
+        // Ждём завершения всех генераций
+        await Promise.all(activeGenerations);
 
-      // Задержка между запусками
-      if (i < segmentsCount - 1) {
-        await new Promise(resolve => setTimeout(resolve, settings.segmentDelayMs));
-      }
-    }
+        if (segmentPaths.length !== segmentsCount) {
+          throw new Error(`Failed to generate all segments: ${segmentPaths.length}/${segmentsCount}`);
+        }
 
-    // Ждём завершения всех генераций
-    await Promise.all(activeGenerations);
+        Logger.info("[MusicClips] All segments generated", {
+          segmentsCount: segmentPaths.length
+        });
 
-    if (segmentPaths.length !== segmentsCount) {
-      throw new Error(`Failed to generate all segments: ${segmentPaths.length}/${segmentsCount}`);
-    }
+        // ========== ШАГ C: Склейка сегментов ==========
+        Logger.info("[MusicClips] Step C: Concatenating segments");
 
-    Logger.info("[MusicClips] All segments generated", {
-      segmentsCount: segmentPaths.length
-    });
+        const segmentsListPath = path.join(renderDir, "segments.txt");
+        const segmentsListContent = segmentPaths
+          .map(segPath => `file '${segPath.replace(/'/g, "'\\''")}'`)
+          .join("\n");
+        await fs.writeFile(segmentsListPath, segmentsListContent, "utf-8");
 
-    // ========== ШАГ C: Склейка сегментов ==========
-    Logger.info("[MusicClips] Step C: Concatenating segments");
+        const stitchedPath = path.join(renderDir, "stitched.mp4");
+        await concatSegments(segmentsListPath, stitchedPath);
 
-    // Создаём список для concat
-    const segmentsListPath = path.join(renderDir, "segments.txt");
-    const segmentsListContent = segmentPaths
-      .map(segPath => `file '${segPath.replace(/'/g, "'\\''")}'`)
-      .join("\n");
-    await fs.writeFile(segmentsListPath, segmentsListContent, "utf-8");
+        Logger.info("[MusicClips] Segments concatenated", {
+          stitchedPath
+        });
 
-    const stitchedPath = path.join(renderDir, "stitched.mp4");
-    await concatSegments(segmentsListPath, stitchedPath);
+        // ========== ШАГ D: Наложение аудио ==========
+        Logger.info("[MusicClips] Step D: Overlaying audio");
 
-    Logger.info("[MusicClips] Segments concatenated", {
-      stitchedPath
-    });
+        const finalPath = path.join(finalDir, "final.mp4");
+        await overlayAudio(stitchedPath, trackTargetPath, finalPath, settings.targetDurationSec);
 
-    // ========== ШАГ D: Наложение аудио ==========
-    Logger.info("[MusicClips] Step D: Overlaying audio");
+        Logger.info("[MusicClips] Audio overlayed", {
+          finalPath
+        });
 
-    const finalPath = path.join(finalDir, "final.mp4");
-    await overlayAudio(stitchedPath, trackTargetPath, finalPath, settings.targetDurationSec);
+        // ========== ШАГ E: Публикация ==========
+        Logger.info("[MusicClips] Step E: Publishing");
 
-    Logger.info("[MusicClips] Audio overlayed", {
-      finalPath
-    });
+        let publicBaseUrl = process.env.PUBLIC_BASE_URL ||
+          process.env.BACKEND_URL ||
+          process.env.FRONTEND_ORIGIN?.replace(":5173", `:${process.env.PORT || 8080}`) ||
+          null;
 
-    // ========== ШАГ E: Публикация ==========
-    Logger.info("[MusicClips] Step E: Publishing");
+        if (!publicBaseUrl) {
+          throw new Error("PUBLIC_BASE_URL or BACKEND_URL must be set for publishing");
+        }
 
-    // Формируем mediaUrl (нужен публичный URL)
-    let publicBaseUrl = process.env.PUBLIC_BASE_URL ||
-      process.env.BACKEND_URL ||
-      process.env.FRONTEND_ORIGIN?.replace(":5173", `:${process.env.PORT || 8080}`) ||
-      null;
+        const mediaUrl = `${publicBaseUrl}/api/music-clips/media/${userFolderKey}/${channelFolderKey}/final.mp4`;
+        const title = `Music Clip - ${channel.name}`;
+        const description = `Generated music clip for ${channel.name}`;
 
-    if (!publicBaseUrl) {
-      throw new Error("PUBLIC_BASE_URL or BACKEND_URL must be set for publishing");
-    }
+        const publishResults = await blottataPublisherService.publishToAllPlatforms({
+          channel,
+          mediaUrl,
+          description,
+          title,
+          userId
+        });
 
-    // Формируем mediaUrl для публикации
-    const mediaUrl = `${publicBaseUrl}/api/music-clips/media/${userFolderKey}/${channelFolderKey}/final.mp4`;
+        const successfulPlatforms: string[] = [];
+        const errors: string[] = [];
 
-    // Генерируем title и description
-    const title = `Music Clip - ${channel.name}`;
-    const description = `Generated music clip for ${channel.name}`;
+        publishResults.forEach(result => {
+          if (result.success) {
+            successfulPlatforms.push(result.platform);
+          } else {
+            errors.push(`${result.platform}: ${result.error || "Unknown error"}`);
+          }
+        });
 
-    const publishResults = await blottataPublisherService.publishToAllPlatforms({
-      channel,
-      mediaUrl,
-      description,
-      title,
-      userId
-    });
+        if (successfulPlatforms.length === 0) {
+          throw new Error(`All platforms failed: ${errors.join("; ")}`);
+        }
 
-    const successfulPlatforms: string[] = [];
-    const errors: string[] = [];
+        Logger.info("[MusicClips] Published successfully", {
+          successfulPlatforms,
+          errors: errors.length > 0 ? errors : undefined
+        });
 
-    publishResults.forEach(result => {
-      if (result.success) {
-        successfulPlatforms.push(result.platform);
+        // ========== ШАГ F: Перенос в uploaded ==========
+        Logger.info("[MusicClips] Step F: Moving to uploaded");
+
+        const uploadedDir = storage.resolveMusicClipsUploadedDir(userFolderKey, channelFolderKey);
+        const timestamp = Date.now();
+        const uploadedFinalPath = path.join(uploadedDir, `final_${timestamp}.mp4`);
+        const uploadedTrackPath = path.join(uploadedDir, `track_${timestamp}.mp3`);
+
+        await fs.rename(finalPath, uploadedFinalPath);
+        await fs.copyFile(trackTargetPath, uploadedTrackPath);
+
+        Logger.info("[MusicClips] Files moved to uploaded", {
+          uploadedFinalPath,
+          uploadedTrackPath
+        });
+
+        return {
+          success: true,
+          trackPath: uploadedTrackPath,
+          finalVideoPath: uploadedFinalPath,
+          publishedPlatforms: successfulPlatforms
+        };
+
+      } else if (recordInfo.status === "FAILED") {
+        Logger.error("[MusicClips] Track generation failed", {
+          taskId,
+          errorMessage: recordInfo.errorMessage
+        });
+        return {
+          success: false,
+          error: `Suno generation failed: ${recordInfo.errorMessage || "Unknown error"}`,
+          taskId,
+          status: "FAILED"
+        };
       } else {
-        errors.push(`${result.platform}: ${result.error || "Unknown error"}`);
+        // PENDING или GENERATING - возвращаем PROCESSING
+        Logger.info("[MusicClips] Track generation still in progress", {
+          channelId: channel.id,
+          userId,
+          taskId,
+          status: recordInfo.status
+        });
+        return {
+          success: true, // success: true, потому что задача создана успешно
+          taskId,
+          status: "PROCESSING"
+        };
       }
-    });
-
-    if (successfulPlatforms.length === 0) {
-      throw new Error(`All platforms failed: ${errors.join("; ")}`);
+    } catch (error: any) {
+      if (error?.code === "SUNO_POLLING_TIMEOUT") {
+        // Timeout - возвращаем PROCESSING для последующего polling
+        Logger.info("[MusicClips] Polling timeout, returning PROCESSING", {
+          channelId: channel.id,
+          userId,
+          taskId,
+          elapsedMs: waitTimeoutMs
+        });
+        return {
+          success: true, // success: true, потому что задача создана успешно
+          taskId,
+          status: "PROCESSING"
+        };
+      }
+      throw error;
     }
-
-    Logger.info("[MusicClips] Published successfully", {
-      successfulPlatforms,
-      errors: errors.length > 0 ? errors : undefined
-    });
-
-    // ========== ШАГ F: Перенос в uploaded ==========
-    Logger.info("[MusicClips] Step F: Moving to uploaded");
-
-    const uploadedDir = storage.resolveMusicClipsUploadedDir(userFolderKey, channelFolderKey);
-    const timestamp = Date.now();
-    const uploadedFinalPath = path.join(uploadedDir, `final_${timestamp}.mp4`);
-    const uploadedTrackPath = path.join(uploadedDir, `track_${timestamp}.mp3`);
-
-    await fs.rename(finalPath, uploadedFinalPath);
-    await fs.copyFile(trackTargetPath, uploadedTrackPath);
-
-    Logger.info("[MusicClips] Files moved to uploaded", {
-      uploadedFinalPath,
-      uploadedTrackPath
-    });
-
-    const duration = Date.now() - startTime;
-    Logger.info("[MusicClips] Pipeline completed successfully", {
-      channelId: channel.id,
-      duration,
-      publishedPlatforms: successfulPlatforms
-    });
-
-    return {
-      success: true,
-      trackPath: uploadedTrackPath,
-      finalVideoPath: uploadedFinalPath,
-      publishedPlatforms: successfulPlatforms
-    };
   } catch (error: any) {
     const duration = Date.now() - startTime;
     Logger.error("[MusicClips] Pipeline failed", {
       channelId: channel.id,
+      userId,
       duration,
       error: error?.message || String(error),
       stack: error?.stack
     });
+
+    // Пробрасываем ошибку кредитов дальше
+    if (error?.code === "SUNO_NO_CREDITS") {
+      throw error;
+    }
 
     return {
       success: false,
