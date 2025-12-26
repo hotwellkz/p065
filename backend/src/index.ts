@@ -47,6 +47,7 @@ import helpRoutes from "./routes/helpRoutes";
 import userSettingsRoutes from "./routes/userSettingsRoutes";
 import mediaRoutes from "./routes/mediaRoutes";
 import musicClipsRoutes from "./routes/musicClipsRoutes";
+import webhooksRoutes from "./routes/webhooksRoutes";
 import { processAutoSendTick } from "./services/autoSendScheduler";
 import { getFirestoreInfo, isFirestoreAvailable } from "./services/firebaseAdmin";
 import { getSunoClient } from "./services/sunoClient";
@@ -246,6 +247,7 @@ app.use("/api/help", helpRoutes);
 app.use("/api/user-settings", userSettingsRoutes);
 app.use("/api/media", mediaRoutes);
 app.use("/api/music-clips", musicClipsRoutes);
+app.use("/api/webhooks", webhooksRoutes);
 
 // Обработчик 404 - логируем все запросы, которые не нашли роут
 app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {

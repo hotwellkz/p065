@@ -96,6 +96,25 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
       });
     }
 
+    // Проверяем callBackUrl (обязательный для Suno API)
+    try {
+      sunoClient.getCallBackUrl();
+    } catch (error: any) {
+      if (error?.code === "CALLBACK_URL_NOT_CONFIGURED") {
+        Logger.error("[MusicClipsAPI] Callback URL not configured", {
+          channelId,
+          userId,
+          error: error.message
+        });
+        return res.status(400).json({
+          success: false,
+          error: "CALLBACK_URL_NOT_CONFIGURED",
+          message: "Callback URL not configured. Set PUBLIC_BASE_URL environment variable."
+        });
+      }
+      throw error;
+    }
+
     // (Опционально) Проверяем кредиты перед запуском
     try {
       const credits = await sunoClient.getCredits();
@@ -221,6 +240,23 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
         ok: false,
         error: "SUNO_NO_CREDITS",
         message: "Недостаточно кредитов Suno для генерации. Пополните баланс.",
+        requestId
+      });
+    }
+
+    // Обработка ошибки отсутствия callBackUrl
+    if (error?.code === "CALLBACK_URL_NOT_CONFIGURED" || error?.code === "CALLBACK_URL_INVALID") {
+      Logger.error("[MusicClipsAPI] Callback URL error", {
+        requestId,
+        channelId,
+        userId,
+        error: error.message
+      });
+      return res.status(400).json({
+        success: false,
+        ok: false,
+        error: error.code,
+        message: error.message || "Callback URL not configured",
         requestId
       });
     }
@@ -658,6 +694,9 @@ router.get("/health", async (req, res) => {
     });
   }
 });
+
+// Callback endpoint перенесен в webhooksRoutes.ts
+// POST /api/webhooks/suno/music
 
 export default router;
 

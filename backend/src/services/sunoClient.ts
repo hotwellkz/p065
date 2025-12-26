@@ -83,6 +83,7 @@ export class SunoClient {
   private client: AxiosInstance;
   private requestTimeout: number;
   private retryConfig: RetryConfig;
+  private callBackUrl: string | null;
 
   constructor() {
     this.apiKey = process.env.SUNO_API_KEY || "";
@@ -90,6 +91,34 @@ export class SunoClient {
     this.apiBaseUrl = process.env.SUNO_API_BASE_URL || "https://api.sunoapi.org";
     // Таймаут для запроса к Suno (60-90 секунд, по умолчанию 90)
     this.requestTimeout = Number(process.env.SUNO_REQUEST_TIMEOUT_MS) || 90000;
+
+    // Получаем callBackUrl из ENV
+    const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+    const callbackPath = process.env.SUNO_CALLBACK_PATH || "/api/webhooks/suno/music";
+    
+    if (publicBaseUrl) {
+      // Убираем trailing slash из baseUrl и добавляем путь
+      const baseUrl = publicBaseUrl.trim().replace(/\/$/, "");
+      this.callBackUrl = `${baseUrl}${callbackPath}`;
+      
+      // Валидация: должен быть HTTPS и не localhost
+      if (!this.callBackUrl.startsWith("https://")) {
+        Logger.error("[MusicClips][Suno] Invalid PUBLIC_BASE_URL: must be HTTPS", {
+          publicBaseUrl,
+          callBackUrl: this.callBackUrl
+        });
+        this.callBackUrl = null;
+      } else if (this.callBackUrl.includes("localhost") || this.callBackUrl.includes("127.0.0.1")) {
+        Logger.error("[MusicClips][Suno] Invalid PUBLIC_BASE_URL: cannot be localhost", {
+          publicBaseUrl,
+          callBackUrl: this.callBackUrl
+        });
+        this.callBackUrl = null;
+      }
+    } else {
+      this.callBackUrl = null;
+      Logger.warn("[MusicClips][Suno] PUBLIC_BASE_URL not set, callBackUrl will not be available");
+    }
 
     if (!this.apiKey) {
       Logger.warn("[MusicClips][Suno] SUNO_API_KEY not set, music generation will fail");
@@ -115,7 +144,9 @@ export class SunoClient {
     Logger.info("[MusicClips][Suno] SunoClient initialized", {
       apiBaseUrl: this.apiBaseUrl,
       hasApiKey: !!this.apiKey,
-      requestTimeout: this.requestTimeout
+      requestTimeout: this.requestTimeout,
+      hasCallBackUrl: !!this.callBackUrl,
+      callBackUrl: this.callBackUrl
     });
   }
 
@@ -124,6 +155,19 @@ export class SunoClient {
    */
   isConfigured(): boolean {
     return !!this.apiKey && this.apiKey.trim().length > 0;
+  }
+
+  /**
+   * Получить callBackUrl для Suno API
+   * @throws Error если callBackUrl не настроен
+   */
+  getCallBackUrl(): string {
+    if (!this.callBackUrl) {
+      const error = new Error("Callback URL not configured. Set PUBLIC_BASE_URL environment variable.") as Error & { code?: string };
+      error.code = "CALLBACK_URL_NOT_CONFIGURED";
+      throw error;
+    }
+    return this.callBackUrl;
   }
 
   /**
@@ -322,6 +366,40 @@ export class SunoClient {
       throw error;
     }
 
+    // Получаем callBackUrl (обязательный параметр)
+    let callBackUrl: string;
+    if (options.callBackUrl) {
+      callBackUrl = options.callBackUrl;
+    } else {
+      try {
+        callBackUrl = this.getCallBackUrl();
+      } catch (error: any) {
+        if (error.code === "CALLBACK_URL_NOT_CONFIGURED") {
+          throw error;
+        }
+        throw error;
+      }
+    }
+
+    // Валидация callBackUrl
+    if (!callBackUrl || callBackUrl.trim().length === 0) {
+      const error = new Error("Callback URL not configured") as Error & { code?: string };
+      error.code = "CALLBACK_URL_NOT_CONFIGURED";
+      throw error;
+    }
+
+    if (!callBackUrl.startsWith("https://")) {
+      const error = new Error("Callback URL must be HTTPS") as Error & { code?: string };
+      error.code = "CALLBACK_URL_INVALID";
+      throw error;
+    }
+
+    if (callBackUrl.includes("localhost") || callBackUrl.includes("127.0.0.1")) {
+      const error = new Error("Callback URL cannot be localhost") as Error & { code?: string };
+      error.code = "CALLBACK_URL_INVALID";
+      throw error;
+    }
+
     const endpoint = "/api/v1/generate";
     const finalUrl = `${this.apiBaseUrl}${endpoint}`;
 
@@ -329,7 +407,8 @@ export class SunoClient {
       prompt: options.prompt,
       customMode: options.customMode ?? false,
       instrumental: options.instrumental ?? false,
-      model: options.model || "V4_5ALL"
+      model: options.model || "V4_5ALL",
+      callBackUrl: callBackUrl // Обязательный параметр
     };
 
     if (options.style) {
@@ -337,9 +416,6 @@ export class SunoClient {
     }
     if (options.title) {
       payload.title = options.title;
-    }
-    if (options.callBackUrl) {
-      payload.callBackUrl = options.callBackUrl;
     }
 
     // Безопасное логирование payload (без секретов)

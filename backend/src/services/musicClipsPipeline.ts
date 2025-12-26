@@ -315,12 +315,14 @@ async function processMusicClipsChannelInternal(
     }
 
     // Используем новый generate API через очередь
+    // callBackUrl будет автоматически добавлен из ENV (PUBLIC_BASE_URL + SUNO_CALLBACK_PATH)
     const generateResult = await sunoQueue.add(() => 
       sunoClient.generate({
         prompt: fullPrompt,
         customMode: false,
         instrumental: false,
         model: "V4_5ALL"
+        // callBackUrl не передаем явно - будет взят из ENV через getCallBackUrl()
       })
     );
 
