@@ -243,6 +243,27 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
     }
 
     // Обработка ошибок Suno API
+    if (error?.code === "SUNO_AUTH_ERROR") {
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_AUTH_ERROR",
+        message: "Suno auth failed. Проверьте SUNO_API_KEY.",
+        requestId
+      });
+    }
+
+    if (error?.code === "SUNO_RATE_LIMITED") {
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_RATE_LIMITED",
+        message: "Suno rate limit exceeded. Попробуйте позже.",
+        retryAfterSec: error?.retryAfterSec || 60,
+        requestId
+      });
+    }
+
     if (error?.code === "SUNO_ENDPOINT_NOT_FOUND") {
       // 404 от Suno - неверный endpoint/baseURL
       return res.status(502).json({
@@ -257,7 +278,7 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
     }
 
     if (error?.code === "SUNO_UNAVAILABLE") {
-      return res.status(503).json({
+      return res.status(502).json({
         success: false,
         ok: false,
         error: "SUNO_UNAVAILABLE",
@@ -267,13 +288,13 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
       });
     }
 
-    if (error?.code === "SUNO_RATE_LIMITED") {
-      return res.status(429).json({
+    if (error?.code === "SUNO_CLIENT_ERROR") {
+      return res.status(502).json({
         success: false,
         ok: false,
-        error: "SUNO_RATE_LIMITED",
-        message: "Suno rate limit exceeded. Try later.",
-        retryAfterSec: error?.retryAfterSec || 60,
+        error: "SUNO_CLIENT_ERROR",
+        message: error?.message || "Suno API client error",
+        status: error?.status,
         requestId
       });
     }

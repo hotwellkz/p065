@@ -379,24 +379,71 @@ export class SunoClient {
         });
       }
 
-      Logger.info("[MusicClips][Suno] Generate response - SUCCESS", {
-        status: response.status,
-        statusText: response.statusText,
+      Logger.info("[MusicClips][Suno] Generate response received", {
+        httpStatus: response.status,
+        httpStatusText: response.statusText,
         headers: Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined,
         responseBody: responseBodyStr,
-        responseKeys: typeof response.data === "object" ? Object.keys(response.data) : [],
+        responseKeys: typeof response.data === "object" && response.data !== null ? Object.keys(response.data) : [],
         hasData: !!response.data,
         dataType: typeof response.data,
-        dataKeys: typeof response.data === "object" && response.data !== null ? Object.keys(response.data) : []
+        dataKeys: typeof response.data === "object" && response.data !== null ? Object.keys(response.data) : [],
+        code: response.data?.code,
+        msg: response.data?.msg,
+        message: response.data?.message
       });
 
-      // Проверяем статус ответа
-      if (response.status !== 200) {
-        Logger.warn("[MusicClips][Suno] Non-200 status from Suno", {
-          status: response.status,
-          statusText: response.statusText,
+      // Проверяем HTTP статус и code в теле ответа
+      // Suno может вернуть HTTP 200, но с code != 200 в теле
+      const responseCode = response.data?.code;
+      const responseMsg = response.data?.msg || response.data?.message || "";
+      const isHttpError = response.status !== 200;
+      const isCodeError = responseCode !== undefined && responseCode !== 200;
+
+      if (isHttpError || isCodeError) {
+        const errorMsg = isCodeError 
+          ? `Suno API returned code ${responseCode}: ${responseMsg}`
+          : `Suno API returned HTTP ${response.status}: ${responseMsg || response.statusText}`;
+        
+        Logger.error("[MusicClips][Suno] Suno API error response", {
+          httpStatus: response.status,
+          httpStatusText: response.statusText,
+          code: responseCode,
+          msg: responseMsg,
           responseBody: responseBodyStr
         });
+
+        const error = new Error(errorMsg) as Error & { 
+          code?: string; 
+          status?: number;
+          responseData?: any;
+        };
+        
+        // Определяем тип ошибки по HTTP статусу или code
+        const errorStatus = isHttpError ? response.status : responseCode;
+        
+        if (errorStatus === 401 || errorStatus === 403) {
+          error.code = "SUNO_AUTH_ERROR";
+          error.status = errorStatus;
+        } else if (errorStatus === 429) {
+          error.code = "SUNO_RATE_LIMITED";
+          error.status = 429;
+        } else if (errorStatus === 402 || 
+                   (response.data && typeof response.data === "object" && 
+                    ((typeof (response.data as any)?.msg === "string" && (response.data as any).msg.toLowerCase().includes("credit")) || 
+                     (typeof (response.data as any)?.message === "string" && (response.data as any).message.toLowerCase().includes("credit"))))) {
+          error.code = "SUNO_NO_CREDITS";
+          error.status = 402;
+        } else if (errorStatus >= 500 || (typeof errorStatus === "number" && errorStatus >= 500)) {
+          error.code = "SUNO_UNAVAILABLE";
+          error.status = errorStatus;
+        } else {
+          error.code = "SUNO_CLIENT_ERROR";
+          error.status = errorStatus;
+        }
+        
+        error.responseData = response.data;
+        throw error;
       }
 
       // Извлекаем taskId из ответа (поддержка различных форматов)
@@ -412,16 +459,15 @@ export class SunoClient {
       // Детальное логирование структуры ответа для отладки
       if (!taskId) {
         Logger.error("[MusicClips][Suno] No taskId in response - DETAILED DEBUG", {
-          status: response.status,
+          httpStatus: response.status,
+          code: responseCode,
+          msg: responseMsg,
           responseBody: responseBodyStr,
           responseKeys: typeof response.data === "object" && response.data !== null ? Object.keys(response.data) : [],
           hasData: !!response.data,
           hasDataData: !!response.data?.data,
           dataKeys: typeof response.data?.data === "object" && response.data?.data !== null ? Object.keys(response.data.data) : [],
           dataType: typeof response.data?.data,
-          code: response.data?.code,
-          msg: response.data?.msg,
-          message: response.data?.message,
           // Проверяем все возможные пути
           checkDataTaskId: response.data?.data?.taskId,
           checkDataTask_id: response.data?.data?.task_id,
@@ -429,35 +475,7 @@ export class SunoClient {
           checkTask_id: response.data?.task_id
         });
 
-        // Если это не 200, это ошибка от Suno, а не просто отсутствие taskId
-        if (response.status !== 200) {
-          const error = new Error(`Suno API returned status ${response.status}: ${response.data?.msg || response.data?.message || "Unknown error"}`) as Error & { 
-            code?: string; 
-            status?: number;
-            responseData?: any;
-          };
-          
-          if (response.status === 401 || response.status === 403) {
-            error.code = "SUNO_AUTH_ERROR";
-          } else if (response.status === 429) {
-            error.code = "SUNO_RATE_LIMITED";
-          } else if (response.status === 402 || 
-                     (response.data && typeof response.data === "object" && 
-                      ((typeof (response.data as any)?.msg === "string" && (response.data as any).msg.toLowerCase().includes("credit")) || 
-                       (typeof (response.data as any)?.message === "string" && (response.data as any).message.toLowerCase().includes("credit"))))) {
-            error.code = "SUNO_NO_CREDITS";
-          } else if (response.status >= 500) {
-            error.code = "SUNO_UNAVAILABLE";
-          } else {
-            error.code = "SUNO_CLIENT_ERROR";
-          }
-          
-          error.status = response.status;
-          error.responseData = response.data;
-          throw error;
-        }
-
-        // Если 200, но нет taskId - это неожиданный формат ответа
+        // Если HTTP 200 и code 200, но нет taskId - это неожиданный формат ответа
         const error = new Error("Suno API did not return taskId") as Error & { code?: string; responseData?: any };
         error.code = "SUNO_NO_TASK_ID";
         error.responseData = response.data;
