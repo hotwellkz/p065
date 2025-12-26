@@ -60,6 +60,16 @@ export interface SunoCreditsResponse {
   msg: string;
 }
 
+export interface SunoJobResult {
+  jobId: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  audioUrl?: string;
+  title?: string;
+  duration?: number;
+  error?: string;
+  metadata?: any;
+}
+
 interface RetryConfig {
   maxRetries: number;
   baseDelayMs: number;
@@ -210,6 +220,53 @@ export class SunoClient {
       baseURL: this.apiBaseUrl,
       endpoint: config?.url
     });
+  }
+
+  /**
+   * Извлечь jobId из ответа Suno (поддержка различных форматов)
+   */
+  private extractJobId(data: any): string | null {
+    if (!data) return null;
+    
+    return data.jobId || 
+           data.job_id || 
+           data.data?.jobId || 
+           data.data?.job_id ||
+           null;
+  }
+
+  /**
+   * Извлечь audioUrl из ответа Suno (поддержка различных форматов)
+   */
+  private extractAudioUrl(data: any): string | null {
+    if (!data) return null;
+
+    // Прямые поля
+    if (data.audio_url) return data.audio_url;
+    if (data.audioUrl) return data.audioUrl;
+    if (data.url) return data.url;
+    if (data.audio) return data.audio;
+
+    // В массиве clips
+    if (Array.isArray(data.clips) && data.clips.length > 0) {
+      const clip = data.clips[0];
+      return clip.audio_url || clip.audioUrl || clip.url || null;
+    }
+
+    // В массиве data
+    if (Array.isArray(data.data) && data.data.length > 0) {
+      const item = data.data[0];
+      return item.audio_url || item.audioUrl || item.url || null;
+    }
+
+    // В объекте result
+    if (data.result?.audio_url) return data.result.audio_url;
+    if (data.result?.audioUrl) return data.result.audioUrl;
+
+    // В объекте assets
+    if (data.assets?.audio) return data.assets.audio;
+
+    return null;
   }
 
   /**
