@@ -557,7 +557,56 @@ const ChannelListPage = () => {
                 });
               }
             } catch (error: any) {
-              console.error("Error polling job status:", error);
+              const errorUrl = `${backendBaseUrl}/api/music-clips/jobs/${jobId}`;
+              console.error("Error polling job status:", {
+                error: error?.message || String(error),
+                jobId,
+                url: errorUrl,
+                status: error?.status,
+                code: error?.code
+              });
+
+              // Обработка 404 - job не найден
+              if (error?.status === 404 || error?.code === "JOB_NOT_FOUND" || 
+                  error?.message?.includes("404") || error?.message?.includes("not found") || 
+                  error?.message?.includes("не найден") || error?.message?.includes("JOB_NOT_FOUND")) {
+                
+                console.warn("[MusicClips] Job not found during polling", {
+                  jobId,
+                  channelId: channel.id,
+                  url: errorUrl,
+                  error: error?.message
+                });
+                
+                setMusicClipsProgress(prev => {
+                  const next = new Map(prev);
+                  const current = next.get(channel.id);
+                  if (current) {
+                    next.set(channel.id, {
+                      ...current,
+                      error: "Job ID не найден на сервере. Вероятно, бэкенд не сохранил job или роут не задеплоен."
+                    });
+                  }
+                  return next;
+                });
+
+                setToast({
+                  message: `Job ID ${jobId} не найден на сервере. Вероятно, бэкенд не сохранил job или роут не задеплоен.`,
+                  type: "error"
+                });
+
+                setRunningMusicClips(prev => {
+                  const next = new Set(prev);
+                  next.delete(channel.id);
+                  return next;
+                });
+
+                if (pollingInterval) {
+                  clearInterval(pollingInterval);
+                }
+                return;
+              }
+              // Для других ошибок продолжаем polling
             }
           };
 

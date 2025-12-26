@@ -132,7 +132,10 @@ export async function getMusicClipsJobStatus(
 
   // 404 - job не найден
   if (response.status === 404) {
-    throw new Error(data.message || `Job ${jobId} не найден`);
+    const error = new Error(data.message || `Job ${jobId} не найден`) as Error & { code?: string; status?: number };
+    error.code = data.error || "JOB_NOT_FOUND";
+    error.status = 404;
+    throw error;
   }
 
   // 200 OK - возвращаем данные

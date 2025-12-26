@@ -465,8 +465,80 @@ router.get("/media/:userFolderKey/:channelFolderKey/:fileName", async (req, res)
 });
 
 /**
+ * GET /api/music-clips/jobs/:jobId
+ * Получение статуса job'а генерации Music Clips
+ */
+router.get("/jobs/:jobId", async (req, res) => {
+  const { jobId } = req.params;
+  const requestId = req.headers["x-request-id"] || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+  Logger.info("[MusicClipsAPI] getJobStatus requested", {
+    requestId,
+    jobId
+  });
+
+  try {
+    const { getMusicClipsJob } = await import("../services/musicClipsJobService");
+    const job = await getMusicClipsJob(jobId);
+
+    if (!job) {
+      Logger.warn("[MusicClipsAPI] Job not found", {
+        requestId,
+        jobId
+      });
+      return res.status(404).json({
+        success: false,
+        ok: false,
+        error: "JOB_NOT_FOUND",
+        message: `Job ${jobId} not found`,
+        requestId
+      });
+    }
+
+    // Проверяем, обновлялся ли job недавно (heartbeat)
+    const updatedAt = job.updatedAt?.toDate ? job.updatedAt.toDate() : new Date(job.updatedAt);
+    const now = new Date();
+    const secondsSinceUpdate = (now.getTime() - updatedAt.getTime()) / 1000;
+    const isStale = secondsSinceUpdate > 60;
+
+    return res.json({
+      success: true,
+      ok: true,
+      jobId: job.jobId,
+      channelId: job.channelId,
+      stage: job.stage,
+      progressText: job.progressText,
+      sunoTaskId: job.sunoTaskId,
+      audioUrl: job.audioUrl,
+      error: job.errorMessage,
+      createdAt: job.createdAt?.toDate ? job.createdAt.toDate().toISOString() : job.createdAt,
+      updatedAt: updatedAt.toISOString(),
+      heartbeat: {
+        secondsSinceUpdate: Math.round(secondsSinceUpdate),
+        isStale
+      },
+      requestId
+    });
+  } catch (error: any) {
+    Logger.error("[MusicClipsAPI] getJobStatus error", {
+      requestId,
+      jobId,
+      error: error?.message || String(error)
+    });
+
+    return res.status(500).json({
+      success: false,
+      ok: false,
+      error: "INTERNAL_ERROR",
+      message: error?.message || "Failed to get job status",
+      requestId
+    });
+  }
+});
+
+/**
  * GET /api/music-clips/tasks/:taskId
- * Проверка статуса задачи Suno
+ * Проверка статуса задачи Suno (legacy, для совместимости)
  */
 router.get("/tasks/:taskId", async (req, res) => {
   const { taskId } = req.params;
