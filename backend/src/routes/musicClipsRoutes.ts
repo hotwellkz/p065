@@ -225,6 +225,23 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
       });
     }
 
+    // Обработка ошибки отсутствия taskId (неверный формат ответа от Suno)
+    if (error?.code === "SUNO_NO_TASK_ID") {
+      Logger.error("[MusicClipsAPI] Suno did not return taskId", {
+        requestId,
+        channelId,
+        userId,
+        responseData: error?.responseData ? JSON.stringify(error.responseData).substring(0, 4096) : undefined
+      });
+      return res.status(502).json({
+        success: false,
+        ok: false,
+        error: "SUNO_NO_TASK_ID",
+        message: "Suno API вернул неожиданный формат ответа (отсутствует taskId). Проверьте логи для деталей.",
+        requestId
+      });
+    }
+
     // Обработка ошибок Suno API
     if (error?.code === "SUNO_ENDPOINT_NOT_FOUND") {
       // 404 от Suno - неверный endpoint/baseURL

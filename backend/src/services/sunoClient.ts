@@ -325,63 +325,147 @@ export class SunoClient {
     const endpoint = "/api/v1/generate";
     const finalUrl = `${this.apiBaseUrl}${endpoint}`;
 
-    Logger.info("[MusicClips][Suno] Generating track", {
+    const payload: any = {
+      prompt: options.prompt,
+      customMode: options.customMode ?? false,
+      instrumental: options.instrumental ?? false,
+      model: options.model || "V4_5ALL"
+    };
+
+    if (options.style) {
+      payload.style = options.style;
+    }
+    if (options.title) {
+      payload.title = options.title;
+    }
+    if (options.callBackUrl) {
+      payload.callBackUrl = options.callBackUrl;
+    }
+
+    // Безопасное логирование payload (без секретов)
+    const payloadStr = JSON.stringify(payload, null, 2).substring(0, 8192);
+
+    Logger.info("[MusicClips][Suno] Generating track - REQUEST", {
+      method: "POST",
+      url: finalUrl,
+      endpoint,
+      baseUrl: this.apiBaseUrl,
+      payload: payloadStr,
+      payloadKeys: Object.keys(payload),
       promptLength: options.prompt.length,
       promptPreview: options.prompt.substring(0, 100) + "...",
       customMode: options.customMode,
       style: options.style,
-      model: options.model,
-      finalUrl
+      title: options.title,
+      model: options.model
     });
 
     try {
-      const payload: any = {
-        prompt: options.prompt,
-        customMode: options.customMode ?? false,
-        instrumental: options.instrumental ?? false,
-        model: options.model || "V4_5ALL"
-      };
-
-      if (options.style) {
-        payload.style = options.style;
-      }
-      if (options.title) {
-        payload.title = options.title;
-      }
-      if (options.callBackUrl) {
-        payload.callBackUrl = options.callBackUrl;
-      }
-
       const response = await this.client.post(endpoint, payload);
 
-      // Безопасное логирование ответа
+      // Безопасное логирование ответа (до 8KB)
       const responseBodyStr = typeof response.data === "object" 
-        ? JSON.stringify(response.data, null, 2).substring(0, 4096)
-        : String(response.data).substring(0, 4096);
+        ? JSON.stringify(response.data, null, 2).substring(0, 8192)
+        : String(response.data).substring(0, 8192);
 
-      Logger.info("[MusicClips][Suno] Generate response", {
+      // Безопасное логирование headers (без Authorization)
+      const safeHeaders: Record<string, string> = {};
+      if (response.headers) {
+        Object.keys(response.headers).forEach(key => {
+          const lowerKey = key.toLowerCase();
+          if (lowerKey !== "authorization" && lowerKey !== "x-api-key") {
+            safeHeaders[key] = String(response.headers[key]);
+          }
+        });
+      }
+
+      Logger.info("[MusicClips][Suno] Generate response - SUCCESS", {
         status: response.status,
-        responseBody: responseBodyStr
+        statusText: response.statusText,
+        headers: Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined,
+        responseBody: responseBodyStr,
+        responseKeys: typeof response.data === "object" ? Object.keys(response.data) : [],
+        hasData: !!response.data,
+        dataType: typeof response.data,
+        dataKeys: typeof response.data === "object" && response.data !== null ? Object.keys(response.data) : []
       });
 
-      // Извлекаем taskId из ответа
+      // Проверяем статус ответа
+      if (response.status !== 200) {
+        Logger.warn("[MusicClips][Suno] Non-200 status from Suno", {
+          status: response.status,
+          statusText: response.statusText,
+          responseBody: responseBodyStr
+        });
+      }
+
+      // Извлекаем taskId из ответа (поддержка различных форматов)
+      // Формат 1: { code: 200, msg: "success", data: { taskId: "..." } }
+      // Формат 2: { taskId: "..." }
+      // Формат 3: { data: { task_id: "..." } }
       const taskId = response.data?.data?.taskId || 
-                     response.data?.taskId || 
                      response.data?.data?.task_id ||
+                     response.data?.taskId || 
                      response.data?.task_id ||
                      null;
 
+      // Детальное логирование структуры ответа для отладки
       if (!taskId) {
-        Logger.error("[MusicClips][Suno] No taskId in response", {
+        Logger.error("[MusicClips][Suno] No taskId in response - DETAILED DEBUG", {
+          status: response.status,
           responseBody: responseBodyStr,
-          responseKeys: typeof response.data === "object" ? Object.keys(response.data) : []
+          responseKeys: typeof response.data === "object" && response.data !== null ? Object.keys(response.data) : [],
+          hasData: !!response.data,
+          hasDataData: !!response.data?.data,
+          dataKeys: typeof response.data?.data === "object" && response.data?.data !== null ? Object.keys(response.data.data) : [],
+          dataType: typeof response.data?.data,
+          code: response.data?.code,
+          msg: response.data?.msg,
+          message: response.data?.message,
+          // Проверяем все возможные пути
+          checkDataTaskId: response.data?.data?.taskId,
+          checkDataTask_id: response.data?.data?.task_id,
+          checkTaskId: response.data?.taskId,
+          checkTask_id: response.data?.task_id
         });
 
+        // Если это не 200, это ошибка от Suno, а не просто отсутствие taskId
+        if (response.status !== 200) {
+          const error = new Error(`Suno API returned status ${response.status}: ${response.data?.msg || response.data?.message || "Unknown error"}`) as Error & { 
+            code?: string; 
+            status?: number;
+            responseData?: any;
+          };
+          
+          if (response.status === 401 || response.status === 403) {
+            error.code = "SUNO_AUTH_ERROR";
+          } else if (response.status === 429) {
+            error.code = "SUNO_RATE_LIMITED";
+          } else if (response.status === 402 || response.data?.msg?.toLowerCase().includes("credit") || response.data?.message?.toLowerCase().includes("credit")) {
+            error.code = "SUNO_NO_CREDITS";
+          } else if (response.status >= 500) {
+            error.code = "SUNO_UNAVAILABLE";
+          } else {
+            error.code = "SUNO_CLIENT_ERROR";
+          }
+          
+          error.status = response.status;
+          error.responseData = response.data;
+          throw error;
+        }
+
+        // Если 200, но нет taskId - это неожиданный формат ответа
         const error = new Error("Suno API did not return taskId") as Error & { code?: string; responseData?: any };
         error.code = "SUNO_NO_TASK_ID";
         error.responseData = response.data;
         throw error;
       }
+
+      Logger.info("[MusicClips][Suno] TaskId extracted successfully", {
+        taskId,
+        code: response.data?.code,
+        msg: response.data?.msg || response.data?.message
+      });
 
       return {
         taskId,
@@ -392,17 +476,41 @@ export class SunoClient {
     } catch (error: any) {
       const axiosError = error as AxiosError;
       
-      // Если это уже наша ошибка (SUNO_NO_TASK_ID), пробрасываем дальше
-      if (error?.code === "SUNO_NO_TASK_ID") {
+      // Если это уже наша ошибка (SUNO_NO_TASK_ID, SUNO_AUTH_ERROR и т.д.), пробрасываем дальше
+      if (error?.code && (error.code.startsWith("SUNO_") || error.code === "SUNO_NO_CREDITS")) {
+        Logger.error("[MusicClips][Suno] Generate failed with known error code", {
+          code: error.code,
+          status: error.status,
+          message: error.message,
+          responseData: error.responseData ? JSON.stringify(error.responseData).substring(0, 4096) : undefined
+        });
         throw error;
       }
 
+      // Логируем ошибку с деталями
       this.logSunoError(axiosError, "Failed to generate track");
 
       const finalStatus = axiosError.response?.status;
+      const responseData = axiosError.response?.data;
+      
+      // Безопасное логирование responseData
+      const responseDataStr = responseData 
+        ? (typeof responseData === "object" ? JSON.stringify(responseData, null, 2).substring(0, 8192) : String(responseData).substring(0, 8192))
+        : undefined;
+
+      Logger.error("[MusicClips][Suno] Generate failed - HTTP error", {
+        status: finalStatus,
+        statusText: axiosError.response?.statusText,
+        responseData: responseDataStr,
+        message: axiosError.message,
+        url: axiosError.config?.url,
+        method: axiosError.config?.method
+      });
+
       const finalError = new Error(`Failed to generate track: ${error?.message || "Unknown error"}`) as Error & { 
         code?: string;
         status?: number;
+        responseData?: any;
       };
 
       if (finalStatus === 404) {
@@ -411,20 +519,30 @@ export class SunoClient {
       } else if (finalStatus === 401 || finalStatus === 403) {
         finalError.code = "SUNO_AUTH_ERROR";
         finalError.status = finalStatus;
-      } else if (finalStatus === 503 || finalStatus === 502 || finalStatus === 504) {
-        finalError.code = "SUNO_UNAVAILABLE";
-        finalError.status = finalStatus;
       } else if (finalStatus === 429) {
         finalError.code = "SUNO_RATE_LIMITED";
         finalError.status = 429;
+      } else if (finalStatus === 402 || 
+                 responseData?.msg?.toLowerCase().includes("credit") || 
+                 responseData?.message?.toLowerCase().includes("credit") ||
+                 responseData?.error?.toLowerCase().includes("credit")) {
+        finalError.code = "SUNO_NO_CREDITS";
+        finalError.status = finalStatus || 402;
+      } else if (finalStatus === 503 || finalStatus === 502 || finalStatus === 504) {
+        finalError.code = "SUNO_UNAVAILABLE";
+        finalError.status = finalStatus;
       } else if (finalStatus && finalStatus >= 400 && finalStatus < 500) {
         finalError.code = "SUNO_CLIENT_ERROR";
+        finalError.status = finalStatus;
+      } else if (finalStatus && finalStatus >= 500) {
+        finalError.code = "SUNO_UNAVAILABLE";
         finalError.status = finalStatus;
       } else {
         finalError.code = "SUNO_ERROR";
         finalError.status = finalStatus;
       }
 
+      finalError.responseData = responseData;
       throw finalError;
     }
   }
