@@ -527,9 +527,9 @@ export class SunoClient {
         finalError.status = 429;
       } else if (finalStatus === 402 || 
                  (typeof responseData === "object" && responseData !== null && 
-                  ((responseData as any)?.msg?.toLowerCase?.()?.includes("credit") || 
-                   (responseData as any)?.message?.toLowerCase?.()?.includes("credit") ||
-                   (responseData as any)?.error?.toLowerCase?.()?.includes("credit")))) {
+                  ((typeof (responseData as any)?.msg === "string" && (responseData as any).msg.toLowerCase().includes("credit")) || 
+                   (typeof (responseData as any)?.message === "string" && (responseData as any).message.toLowerCase().includes("credit")) ||
+                   (typeof (responseData as any)?.error === "string" && (responseData as any).error.toLowerCase().includes("credit"))))) {
         finalError.code = "SUNO_NO_CREDITS";
         finalError.status = finalStatus || 402;
       } else if (finalStatus === 503 || finalStatus === 502 || finalStatus === 504) {
