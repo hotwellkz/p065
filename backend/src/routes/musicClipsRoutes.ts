@@ -7,7 +7,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { createReadStream } from "fs";
 import { Logger } from "../utils/logger";
-import { processMusicClipsChannel } from "../services/musicClipsPipeline";
+import { processMusicClipsChannel, processMusicClipsChannelWithJob } from "../services/musicClipsPipeline";
 import { db, isFirestoreAvailable } from "../services/firebaseAdmin";
 import { getStorageService } from "../services/storageService";
 import { getSunoClient } from "../services/sunoClient";
@@ -144,24 +144,38 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
       // Продолжаем выполнение, если проверка кредитов не удалась
     }
 
-    // Запускаем пайплайн
-    const result = await processMusicClipsChannel(channel, userId);
+    // Создаем job для отслеживания прогресса
+    const { generateJobId, createMusicClipsJob } = await import("../services/musicClipsJobService");
+    const jobId = generateJobId();
 
-    // Если пайплайн вернул PROCESSING (асинхронный taskId)
-    if (result.status === "PROCESSING" && result.taskId) {
-      Logger.info("[MusicClipsAPI] Returning PROCESSING status", {
+    // Создаем job в Firestore
+    await createMusicClipsJob(jobId, channelId, userId, "STAGE_10_REQUEST_ACCEPTED");
+
+    // Запускаем пайплайн асинхронно (не ждем завершения)
+    processMusicClipsChannelWithJob(channel, userId, jobId).catch((error: any) => {
+      Logger.error("[MusicClipsAPI] Pipeline error (async)", {
+        jobId,
         channelId,
         userId,
-        taskId: result.taskId
+        error: error?.message || String(error)
       });
-      return res.status(202).json({
-        success: true,
-        ok: true,
-        status: "PROCESSING",
-        taskId: result.taskId,
-        message: "Генерация запущена, используйте GET /api/music-clips/tasks/:taskId для проверки статуса"
-      });
-    }
+    });
+
+    // Немедленно возвращаем 202 с jobId
+    Logger.info("[MusicClipsAPI] Returning 202 with jobId", {
+      jobId,
+      channelId,
+      userId
+    });
+    return res.status(202).json({
+      success: true,
+      ok: true,
+      jobId,
+      channelId,
+      stage: "STAGE_10_REQUEST_ACCEPTED",
+      createdAt: new Date().toISOString(),
+      message: "Генерация запущена, используйте GET /api/music-clips/jobs/:jobId для проверки статуса"
+    });
 
     // Если пайплайн вернул FAILED
     if (result.status === "FAILED") {

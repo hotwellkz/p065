@@ -11,20 +11,44 @@ const backendBaseUrl =
 
 export interface MusicClipsRunOnceResponse {
   success: boolean;
-  ok?: boolean; // Дополнительное поле для совместимости
+  ok?: boolean;
   error?: string;
+  jobId?: string;
+  channelId?: string;
+  stage?: string;
+  createdAt?: string;
+  message?: string;
+  requestId?: string;
+  // Legacy fields
+  status?: "PROCESSING" | "DONE" | "FAILED";
+  taskId?: string;
   trackPath?: string;
   finalVideoPath?: string;
   publishedPlatforms?: string[];
-  status?: "PROCESSING" | "DONE" | "FAILED";
-  taskId?: string;
-  message?: string;
+}
+
+export interface MusicClipsJobStatusResponse {
+  success: boolean;
+  ok?: boolean;
+  jobId: string;
+  channelId: string;
+  stage: string;
+  progressText?: string;
+  sunoTaskId?: string | null;
+  audioUrl?: string | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  heartbeat: {
+    secondsSinceUpdate: number;
+    isStale: boolean;
+  };
   requestId?: string;
 }
 
 export interface MusicClipsTaskStatusResponse {
   success: boolean;
-  ok?: boolean; // Дополнительное поле для совместимости
+  ok?: boolean;
   status: "PROCESSING" | "DONE" | "FAILED";
   taskId: string;
   audioUrl?: string;
@@ -61,11 +85,12 @@ export async function runMusicClipsOnce(
 
   const data = await response.json().catch(() => ({}));
 
-  // 202 Accepted - задача создана, но ещё обрабатывается
+  // 202 Accepted - job создан, но ещё обрабатывается
   if (response.status === 202) {
     return {
       ...data,
-      status: data.status || "PROCESSING"
+      jobId: data.jobId,
+      stage: data.stage || "STAGE_10_REQUEST_ACCEPTED"
     } as MusicClipsRunOnceResponse;
   }
 
@@ -84,7 +109,45 @@ export async function runMusicClipsOnce(
 }
 
 /**
- * Проверяет статус задачи генерации музыки
+ * Проверяет статус job'а генерации музыки
+ * @param jobId - ID job'а
+ */
+export async function getMusicClipsJobStatus(
+  jobId: string
+): Promise<MusicClipsJobStatusResponse> {
+  const token = await getAuthToken();
+
+  const response = await fetch(
+    `${backendBaseUrl}/api/music-clips/jobs/${jobId}`,
+    {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      }
+    }
+  );
+
+  const data = await response.json().catch(() => ({}));
+
+  // 404 - job не найден
+  if (response.status === 404) {
+    throw new Error(data.message || `Job ${jobId} не найден`);
+  }
+
+  // 200 OK - возвращаем данные
+  if (response.ok) {
+    return data as MusicClipsJobStatusResponse;
+  }
+
+  // Другие ошибки
+  throw new Error(
+    data.error || data.message || `Ошибка при проверке статуса: ${response.status}`
+  );
+}
+
+/**
+ * Проверяет статус задачи генерации музыки (legacy, для совместимости)
  * @param taskId - ID задачи Suno
  * @param userId - ID пользователя
  */

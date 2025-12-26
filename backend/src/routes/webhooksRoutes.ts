@@ -84,74 +84,89 @@ router.post("/suno/music", async (req, res) => {
       duration
     });
 
-    // Сохраняем результат в Firestore (если доступен)
-    if (isFirestoreAvailable() && db) {
-      try {
-        // Ищем канал с этим taskId в lastJobId
-        // Это упрощенный поиск - в реальности может потребоваться отдельная коллекция для задач
-        const usersRef = db.collection("users");
-        const usersSnapshot = await usersRef.get();
-        
-        let found = false;
-        for (const userDoc of usersSnapshot.docs) {
-          const channelsRef = userDoc.ref.collection("channels");
-          const channelsSnapshot = await channelsRef.get();
-          
-          for (const channelDoc of channelsSnapshot.docs) {
-            const channelData = channelDoc.data();
-            const lastJobId = channelData?.musicClipsSettings?.lastJobId;
-            
-            if (lastJobId === taskId) {
-              // Обновляем статус задачи
-              const currentSettings = channelData.musicClipsSettings || {};
-              await channelDoc.ref.update({
-                musicClipsSettings: {
-                  ...currentSettings,
-                  lastJobId: taskId,
-                  lastJobStatus: status === "SUCCESS" ? "completed" : status === "FAILED" ? "failed" : "processing",
-                  lastJobAudioUrl: audioUrl || null,
-                  lastJobTitle: title || null,
-                  lastJobDuration: duration || null,
-                  lastJobUpdatedAt: require("firebase-admin").firestore.FieldValue.serverTimestamp()
-                },
-                updatedAt: require("firebase-admin").firestore.FieldValue.serverTimestamp()
-              });
+    // Обновляем job через jobService
+    try {
+      const { findJobBySunoTaskId, updateMusicClipsJob, logStageTransition } = await import("../services/musicClipsJobService");
+      const job = await findJobBySunoTaskId(taskId);
 
-              Logger.info("[Webhooks][Suno] Task status updated in Firestore", {
-                requestId,
-                taskId,
-                channelId: channelDoc.id,
-                userId: userDoc.id,
-                status
-              });
+      if (job) {
+        if (status === "SUCCESS" && audioUrl) {
+          await updateMusicClipsJob(job.jobId, {
+            stage: "STAGE_50_SUNO_SUCCESS",
+            audioUrl: audioUrl
+          });
+          logStageTransition(job.jobId, job.stage, "STAGE_50_SUNO_SUCCESS", { source: "callback", audioUrl: audioUrl.substring(0, 100) });
 
-              found = true;
-              break;
-            }
-          }
-          
-          if (found) break;
-        }
-
-        if (!found) {
-          Logger.warn("[Webhooks][Suno] TaskId not found in any channel", {
+          Logger.info("[Webhooks][Suno] Job updated: SUCCESS", {
             requestId,
+            jobId: job.jobId,
+            taskId,
+            audioUrl: audioUrl.substring(0, 100) + "..."
+          });
+        } else if (status === "FAILED") {
+          await updateMusicClipsJob(job.jobId, {
+            stage: "STAGE_90_FAILED",
+            errorMessage: `Suno generation failed: ${title || "Unknown error"}`
+          });
+          logStageTransition(job.jobId, job.stage, "STAGE_90_FAILED", { source: "callback" });
+
+          Logger.info("[Webhooks][Suno] Job updated: FAILED", {
+            requestId,
+            jobId: job.jobId,
             taskId
           });
+        } else {
+          // PENDING/GENERATING - обновляем только стадию
+          await updateMusicClipsJob(job.jobId, {
+            stage: "STAGE_40_SUNO_PENDING"
+          });
         }
-      } catch (firestoreError: any) {
-        Logger.error("[Webhooks][Suno] Failed to update Firestore", {
+      } else {
+        Logger.warn("[Webhooks][Suno] Job not found for taskId", {
           requestId,
-          taskId,
-          error: firestoreError?.message || String(firestoreError)
+          taskId
         });
-        // Не прерываем выполнение - логируем и продолжаем
+
+        // Fallback: обновляем канал (legacy)
+        if (isFirestoreAvailable() && db) {
+          const usersRef = db.collection("users");
+          const usersSnapshot = await usersRef.get();
+          
+          for (const userDoc of usersSnapshot.docs) {
+            const channelsRef = userDoc.ref.collection("channels");
+            const channelsSnapshot = await channelsRef.get();
+            
+            for (const channelDoc of channelsSnapshot.docs) {
+              const channelData = channelDoc.data();
+              const lastJobId = channelData?.musicClipsSettings?.lastJobId;
+              
+              if (lastJobId === taskId) {
+                const currentSettings = channelData.musicClipsSettings || {};
+                await channelDoc.ref.update({
+                  musicClipsSettings: {
+                    ...currentSettings,
+                    lastJobId: taskId,
+                    lastJobStatus: status === "SUCCESS" ? "completed" : status === "FAILED" ? "failed" : "processing",
+                    lastJobAudioUrl: audioUrl || null,
+                    lastJobTitle: title || null,
+                    lastJobDuration: duration || null,
+                    lastJobUpdatedAt: require("firebase-admin").firestore.FieldValue.serverTimestamp()
+                  },
+                  updatedAt: require("firebase-admin").firestore.FieldValue.serverTimestamp()
+                });
+                break;
+              }
+            }
+          }
+        }
       }
-    } else {
-      Logger.warn("[Webhooks][Suno] Firestore not available, skipping DB update", {
+    } catch (error: any) {
+      Logger.error("[Webhooks][Suno] Failed to update job", {
         requestId,
-        taskId
+        taskId,
+        error: error?.message || String(error)
       });
+      // Не прерываем выполнение
     }
 
     // Возвращаем успешный ответ
