@@ -506,6 +506,15 @@ async function startServerSidePolling(
         logStageTransition(jobId, "STAGE_40_SUNO_PENDING", "STAGE_50_SUNO_SUCCESS", { source: "server-side-polling" });
 
         // Продолжаем обработку
+        if (!channel.ownerId) {
+          Logger.error("[MusicClips] Channel ownerId is missing in server-side polling", {
+            jobId,
+            taskId,
+            channelId: channel.id
+          });
+          return;
+        }
+
         const storage = getStorageService();
         const userEmail = `${channel.ownerId}@unknown.local`;
         const userFolderKey = await storage.resolveUserFolderKey(channel.ownerId, userEmail);

@@ -176,53 +176,6 @@ router.post("/channels/:channelId/runOnce", async (req, res) => {
       createdAt: new Date().toISOString(),
       message: "Генерация запущена, используйте GET /api/music-clips/jobs/:jobId для проверки статуса"
     });
-
-    // Если пайплайн вернул FAILED
-    if (result.status === "FAILED") {
-      Logger.error("[MusicClipsAPI] Pipeline failed", {
-        channelId,
-        userId,
-        error: result.error,
-        taskId: result.taskId
-      });
-      return res.status(502).json({
-        success: false,
-        ok: false,
-        status: "FAILED",
-        error: result.error || "Pipeline failed",
-        taskId: result.taskId,
-        message: result.error || "Генерация музыки провалилась"
-      });
-    }
-
-    // Успешное завершение
-    if (result.success) {
-      Logger.info("[MusicClipsAPI] Pipeline completed successfully", {
-        channelId,
-        userId,
-        publishedPlatforms: result.publishedPlatforms
-      });
-      return res.json({
-        success: true,
-        ok: true,
-        status: "DONE",
-        trackPath: result.trackPath,
-        finalVideoPath: result.finalVideoPath,
-        publishedPlatforms: result.publishedPlatforms
-      });
-    }
-
-    // Неожиданный результат
-    Logger.error("[MusicClipsAPI] Unexpected pipeline result", {
-      channelId,
-      userId,
-      result
-    });
-    return res.status(500).json({
-      success: false,
-      ok: false,
-      error: result.error || "Pipeline failed with unknown error"
-    });
   } catch (error: any) {
     const requestId = req.headers["x-request-id"] || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
